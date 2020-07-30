@@ -15,4 +15,4 @@ Graphs include:
 - An interactive datatable of summary pH data
 - An interactive pH dygraph
 
-The Calibrationplotting_AquaticRTools.Rmd takes a large pH dataset and creates 3 months plots with calibration lines plotted by color of calibration (Successful, No calibration, Low Flow).
+The Calibrationplotting_AquaticRTools.Rmd takes a large pH dataset and plots data every 3 months with calibration lines plotted by color of calibration (Successful, No calibration, Low Flow).
