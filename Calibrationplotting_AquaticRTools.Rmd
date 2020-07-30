@@ -52,7 +52,7 @@ minute(pHdata$Date)<-minute(pHdata$Time)
 pHdata$DateTime<-pHdata$Date
 
 pHdata<-pHdata %>% select(-Date, -Time) %>%
-  select(DateTime, Site, pH, everything()) #temp units have knitting issues wiht Temp="Temp (°C)" 
+  select(DateTime, Site, pH, everything()) #temp units have knitting issues wiht Temp="Temp (Â°C)" 
 colnames(pHdata)<-c("DateTime", "Site", "pH", "Temp") #so just renaming here
 ```
 
@@ -89,42 +89,6 @@ return(alldata)
 
 ```
 
-
-```{r assignwatershed function, message=FALSE, warning=FALSE, include=FALSE}
-#to help color code plots, athis function assigns watershed to the site
-
-assignwatershed<-function(loggerdata){
-  loggerdata<-as.data.frame(loggerdata) #incase loggerdata is a tibble
-  loggerdata$Wtshed<-as.character("NA")
-  
-  #Determine which column is "Site"
-  datasiteindex<-grep("^Site", colnames(loggerdata), ignore.case = TRUE)
-  
-  #https://stackoverflow.com/questions/4427234/get-column-index-from-label-in-a-data-frame/4427459
-  datasiteindex<-as.integer(datasiteindex)
-  
-  #Vectors assigning sites to watersheds
- Gondor<-c("Site-1", "Site-2", "Site-4")
- Hogwarts<-c("Site-5", "Site-6")
- CasterlyRock<-c("Site-3", "Site-7", "Site-8", "Site-10", "Site-11", "Site-12")
- Tatooine<-c("Site-9")
-  
-  #find index of each location for the watershed
-  ##this chunk wont work for tibbles
-  Gloc<-which(loggerdata[,datasiteindex] %in% Gondor) #match only returns first match, use which with "%in%" to get all matches
-  Hogloc<-which(loggerdata[,datasiteindex] %in% Hogwarts)
-  CRloc<-which(loggerdata[,datasiteindex] %in% CasterlyRock)
-  Tloc<-which(loggerdata[,datasiteindex] %in% Tatooine)
-  
-  #Create and fill new Watershed column
-  loggerdata$Wtshed[Gloc]<-"Gondor"
-  loggerdata$Wtshed[Hogloc]<-"Hogwarts"
-  loggerdata$Wtshed[CRloc]<-"CasterlyRock"
-  loggerdata$Wtshed[Tloc]<-"Tatooine"
-  
-  return(loggerdata)
-}
-```
 
 ```{r pH plots, message=FALSE, warning=FALSE, include=FALSE, fig.width=10}
 #Plotting Function
