@@ -1,0 +1,274 @@
+---
+title: "Calibration plotting"
+author:
+date: 
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(writexl)
+library(readxl)
+library(lubridate)
+library(tidyverse)
+library(ggpubr)
+library(scales)
+library(readxl)
+library(reshape2)
+library(gtools)
+library(broom)
+library(tidyquant)
+library(purrr)
+library(scales)
+library(DT)
+
+options(scipen=999)
+
+setwd("F:/R/AquaticR Tools/Conoco pH Data")
+```
+
+
+```{r Import pH data, message=FALSE, warning=FALSE, include=FALSE}
+#all of the read excel is from the same sheet: pH Logger Data thru 3-4-20.xlsx
+#every site is a different sheet
+#read in site names
+sites<-excel_sheets("F:/R/AquaticR Tools/Conoco pH Data/pH Logger Data/pH Logger Data thru 3-4-20.xlsx")
+
+#read in data from first site
+pHdata<-read_xlsx("F:/R/AquaticR Tools/Conoco pH Data/pH Logger Data/pH Logger Data thru 3-4-20.xlsx", sheet="Site-1", skip=1) %>%
+  mutate(Site="Site-1")
+
+#paste rest of data to bottom of dataframe, adding a column to label the site
+for(i in 2:length(sites)){#starting at site 2 since we have site 1 already
+  newdat<-read_xlsx("F:/R/AquaticR Tools/Conoco pH Data/pH Logger Data/pH Logger Data thru 3-4-20.xlsx", sheet=sites[i], skip=1) %>% 
+    mutate(Site=sites[i])
+  pHdata<-rbind(pHdata, newdat) 
+}
+
+#original data had Date and Time in separate columns.  So, correcting the date in the time column
+hour(pHdata$Date)<-hour(pHdata$Time)
+minute(pHdata$Date)<-minute(pHdata$Time)
+pHdata$DateTime<-pHdata$Date
+
+pHdata<-pHdata %>% select(-Date, -Time) %>%
+  select(DateTime, Site, pH, everything()) #temp units have knitting issues wiht Temp="Temp (°C)" 
+colnames(pHdata)<-c("DateTime", "Site", "pH", "Temp") #so just renaming here
+```
+
+```{r Import and format CalData, message=FALSE, warning=FALSE, include=FALSE}
+calinfo<-read.csv("F:/R/AquaticR Tools/Conoco pH Data/Calibration/CalDates_tr.csv", stringsAsFactors = FALSE)%>%
+  select(Site=station, Date=calibration.Date, Comments=comments.calibration.Comments) %>%
+  mutate(Date=as.POSIXct(Date, tz="EST", format=c("%m/%d/%Y"))) #formatting date column
+
+#turning comments into variables (No calibration, No flow) we can color code by
+calinfo<-calinfo%>%
+  mutate(NoCal=ifelse(str_detect(Comments, "calibration|calibrate|high flow"), 1, NA))%>%
+  mutate(NoFlow=ifelse(str_detect(Comments, "out of water"), 1, NA))
+
+```
+
+
+```{r addNA, message=FALSE, warning=FALSE, include=FALSE}
+#for graphing with goem_line - if timestamps don't exist, the plot will draw a line connecting the data gap.  To prevent that, we add in those time stamps and assign NA to the pH
+
+addNA<-function(data, start, end, by='1 hour'){
+  #generating data frame with all dates (by half hour) between start and end time
+  full <- data.frame(DateTime=seq(start, end, by=by))
+  site<-data$Site[1]
+  
+  #joining KNF and empty data frame
+  alldata<-full_join(data, full, by="DateTime")
+  alldata$Site<-site #assign missing values a siteID
+  
+  #put all values in chronological order
+  alldata<-alldata[order(alldata$DateTime),]
+
+return(alldata)
+}
+
+```
+
+
+```{r assignwatershed function, message=FALSE, warning=FALSE, include=FALSE}
+#to help color code plots, athis function assigns watershed to the site
+
+assignwatershed<-function(loggerdata){
+  loggerdata<-as.data.frame(loggerdata) #incase loggerdata is a tibble
+  loggerdata$Wtshed<-as.character("NA")
+  
+  #Determine which column is "Site"
+  datasiteindex<-grep("^Site", colnames(loggerdata), ignore.case = TRUE)
+  
+  #https://stackoverflow.com/questions/4427234/get-column-index-from-label-in-a-data-frame/4427459
+  datasiteindex<-as.integer(datasiteindex)
+  
+  #Vectors assigning sites to watersheds
+ Gondor<-c("Site-1", "Site-2", "Site-4")
+ Hogwarts<-c("Site-5", "Site-6")
+ CasterlyRock<-c("Site-3", "Site-7", "Site-8", "Site-10", "Site-11", "Site-12")
+ Tatooine<-c("Site-9")
+  
+  #find index of each location for the watershed
+  ##this chunk wont work for tibbles
+  Gloc<-which(loggerdata[,datasiteindex] %in% Gondor) #match only returns first match, use which with "%in%" to get all matches
+  Hogloc<-which(loggerdata[,datasiteindex] %in% Hogwarts)
+  CRloc<-which(loggerdata[,datasiteindex] %in% CasterlyRock)
+  Tloc<-which(loggerdata[,datasiteindex] %in% Tatooine)
+  
+  #Create and fill new Watershed column
+  loggerdata$Wtshed[Gloc]<-"Gondor"
+  loggerdata$Wtshed[Hogloc]<-"Hogwarts"
+  loggerdata$Wtshed[CRloc]<-"CasterlyRock"
+  loggerdata$Wtshed[Tloc]<-"Tatooine"
+  
+  return(loggerdata)
+}
+```
+
+```{r pH plots, message=FALSE, warning=FALSE, include=FALSE, fig.width=10}
+#Plotting Function
+
+#function variables
+#data = data
+#parameter = parameter of interest
+#thresh1 = lower thresholds
+#thresh2 = upper thresholds
+#Site = Site
+#date.breaks = date breaks for x axis
+#date.format = format of date on x axis
+#ymin = y axis minimum
+#ymax = y axis maximum
+#datebound = vector of two POSIXct values - start and end date to plot: c(date1, date2)
+
+#To see how the function works, uncomment the next lines and to set the variables, then run the code in the function (format pH data below the function first to get pHdata1)
+# data=pHpdata1
+# parameter="pH" 
+# Site=pHsites[1]
+# date.breaks="1 week" 
+# date.format="%m-%d"
+# datebound=c(pHpdata1$DateTime[1], pHpdata1$DateTime[nrow(pHpdata1)])
+
+pointplot<-function(data, parameter, thresh1=6.5, thresh2=8.5, Site, date.breaks="1 month", date.format="%Y-%m", ymin=6, ymax=10, datebound=NA){
+
+  if(is.na(datebound)){ #plot entire dataset if datebound is not specified
+    datebound=c(data$DateTime[1], data$DateTime[nrow(data)])
+  }
+  
+  #find parameter column
+  coln<-colnames(data)
+  loc<-as.integer(which(coln==parameter))
+  yvalues<-as.vector(data[[loc]])
+  
+  pointplot<-data %>% #filter(minute(DateTime)==0) %>% 
+    ggplot(aes(x=DateTime, y=yvalues, color=CalValue))+
+      geom_line(color="#0072B2")+ #data color
+      geom_line(y=thresh1, color="#D55E00")+ 
+      geom_line(y=thresh2, color="#D55E00")+
+      labs(title=paste(parameter, Site),
+           subtitle="Cal Dates = Dashed Lines:\nGreen=No Cal (high flow, unable to calibrate), Red=No/Low Flow", y=parameter, x="Date")+
+      theme_tq()+
+      scale_color_tq()+
+      scale_x_datetime(lim=datebound, #setting limits of x scale
+                       labels=date_format(date.format), 
+                       breaks=date_breaks(date.breaks))+
+      ylim(ymin, ymax)+
+      theme(legend.position = "none",
+            plot.title=element_text(hjust=0.5, size=14, face="bold"),
+            plot.subtitle=element_text(hjust=0.5, size=12),
+            plot.margin=margin(1,1,1,1, "point"),
+            axis.text.x=element_text(angle=45, hjust=0.8, vjust=0.8))
+  pointplot
+  return(pointplot)
+}
+```
+
+```{r create plots by site, echo=FALSE, message=FALSE, warning=FALSE}
+pHsites<-unique(pHdata$Site)
+
+#add na values by site
+for(i in 1:length(pHsites)){
+  data<-pHdata %>%
+    filter(Site==pHsites[i])  #filter to get your site of interest
+  
+  #add nas between the beginning and end of the dataset time
+  data<-addNA(data, data$DateTime[1], data$DateTime[nrow(data)])
+  data$month<-month(data$DateTime)
+  
+  #bind all data together
+  if(i==1){
+  pHdataQAna<-data
+  }
+   else{pHdataQAna=rbind(pHdataQAna, data)
+   }
+}
+
+#Creating one variable for Calibration Record to use in plotting
+callong<-calinfo %>% 
+  mutate(CalValue=ifelse(is.na(NoCal), "Cal", "NoCal"))%>%
+  mutate(CalValue=ifelse(!is.na(NoFlow), "NoFlow", CalValue))
+
+callong$CalValue<-factor(callong$CalValue, 
+                         levels=c(unique(callong$CalValue)))
+
+#to test these loops, set i=1 and j=1 to 
+for(i in 1:10){ #not site-11 or site-12
+  pHpdata<-pHdataQAna %>% filter(Site==pHsites[i])
+  calpdat<-callong %>% filter(Site==pHsites[i])
+  
+x<-range(pHpdata$DateTime) #range of time at site
+
+#I want to see the data plotted every two months (by=2 months of seconds) to look at calibration
+#this creates a vector of time values to subset our plots by
+timeint<-c(seq(from=x[1], to=x[2], by=60*60*24*60), x[2]) 
+  
+  for(j in 1:(length(timeint)-1)){ #going to cycle through each time interval to make plots for the site
+  starttime<-timeint[j] #set your start time
+  endtime<-timeint[j+1] #set your end time
+  
+  #filter data to be between start and end time
+  pHpdata1<-pHpdata %>%
+    filter(DateTime>starttime)%>%
+    filter(DateTime<endtime)
+  
+  #filter calibration notes to be between start and end time
+  calpdat1<-calpdat %>%
+    filter(Date>starttime)%>%
+    filter(Date<endtime)
+  
+  #to correctly map colors in a plot, you have to know how many colors
+  #there will be
+  
+  if(sum(calpdat1$NoCal, na.rm=TRUE)>0){ #there is a nocal event
+    if(sum(calpdat1$NoFlow, na.rm=TRUE)>0){ #wiht a no flow event
+      colvalues<-c("#000000", "#009E73", "#D55E00") #map all three colors
+    }
+    else{colvalues<-c("#000000", "#009E73")} #no cal without a no flow, map two colors
+  }
+  if(sum(calpdat1$NoFlow, na.rm=TRUE)>0 &&  #if there is a noflow event
+     sum(calpdat1$NoCal, na.rm=TRUE)==0){ #but no nocal event
+    colvalues<-c("#000000", "#D55E00")} #map two different colors
+  
+  if(sum(calpdat1$NoFlow, na.rm=TRUE)==0 && #if all calibrations are successful
+     sum(calpdat1$NoCal, na.rm=TRUE)==0){
+    colvalues<-c("#000000") #map one color
+    }
+  
+  #make plot using function above, and then add lines for calibration dates
+  calplot<-pointplot(pHpdata1, parameter="pH", Site=pHsites[i],
+                     date.breaks="1 week", date.format="%m-%d",
+                     datebound=c(pHpdata1$DateTime[1],
+                                 pHpdata1$DateTime[nrow(pHpdata1)]))+
+    geom_vline(data=calpdat1, 
+               mapping=aes(xintercept=Date,
+                                          color=CalValue),
+               linetype='dashed')+
+    scale_color_manual(values=colvalues)
+  print(calplot)
+  }
+}
+
+
+```
+
+
