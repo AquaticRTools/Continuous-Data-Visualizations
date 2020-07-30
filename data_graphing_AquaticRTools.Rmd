@@ -1,0 +1,1936 @@
+---
+title: "Continuous Data Plotting"
+output: html_document
+---
+
+For this markdown document, I created several plotting functions, site assigned plots to variables, then printed them using ggarrange. 
+
+I've outlined the steps as headers.
+
+##### - Import Data
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(writexl)
+library(readxl)
+library(lubridate)
+library(tidyverse)
+library(ggpubr)
+library(scales)
+library(readxl)
+library(reshape2)
+library(gtools)
+library(broom)
+library(tidyquant)
+library(purrr)
+library(scales)
+library(DT)
+library(knitr)
+
+options(scipen=999)
+
+setwd("F:/R/AquaticR Tools/Conoco pH Data")
+
+#continuous data
+#pH
+sites<-excel_sheets("F:/R/AquaticR Tools/Conoco pH Data/pH Logger Data/pH Logger Data thru 3-4-20.xlsx")
+
+#read in data from first site
+pHdata<-read_xlsx("F:/R/AquaticR Tools/Conoco pH Data/pH Logger Data/pH Logger Data thru 3-4-20.xlsx", sheet="Site-1", skip=1) %>%
+  mutate(Site="Site-1")
+
+#paste rest of data to bottom of dataframe, adding a column to label the site
+for(i in 2:length(sites)){#starting at site 2 since we have site 1 already
+  newdat<-read_xlsx("F:/R/AquaticR Tools/Conoco pH Data/pH Logger Data/pH Logger Data thru 3-4-20.xlsx", sheet=sites[i], skip=1) %>% 
+    mutate(Site=sites[i])
+  pHdata<-rbind(pHdata, newdat) 
+}
+
+#original data had Date and Time in separate columns.  So, correcting the date in the time column
+hour(pHdata$Date)<-hour(pHdata$Time)
+minute(pHdata$Date)<-minute(pHdata$Time)
+pHdata$DateTime<-pHdata$Date
+
+pHdata<-pHdata %>% select(-Date, -Time) %>%
+  select(DateTime, Site, pH, everything()) #temp units have knitting issues with Temp="Temp (°C)" 
+colnames(pHdata)<-c("DateTime", "Site", "pH", "Temp") #so just renaming here
+
+
+```
+
+```{r Import and format DO data, message=FALSE, warning=FALSE, include=FALSE}
+#DO data
+
+###There are lots of quirky importing errors - if it doesn't work check column names
+
+library(openxlsx) #DateTime conversion
+Site3<-read_xlsx("F:/R/AquaticR Tools/Conoco pH Data/DO Data/Cono-3  7-15- thru 7-24-19 (1).xlsx", skip=26) %>% mutate(Site="Site-3") %>%
+  select(DateTime="Date Time", DO="Dissolved Oxygen mg/L", SpC="Specific Conductivity (ÂµS/cm) (506802)", Temp="Temperature (Â°C) (509483)", pSat="RDO Saturation (%Sat) (667349)", Site) %>%
+  filter(!is.na(DO)) %>%
+  mutate(DateTime=convertToDateTime(DateTime, origin = "1900-01-01")) 
+  
+#might have to remove Â for knitting
+
+Site8<-read_xlsx("F:/R/AquaticR Tools/Conoco pH Data/DO Data/Cono-8  7-15- thru 7-24-19.xlsx", skip=26) %>% mutate(Site="Site-8") %>%
+  select(DateTime="Date Time", DO="DO Concentration (mg/L) (669929)", pH="pH (pH) (475514)", SpC="Specific Conductivity (ÂµS/cm) (506188)", Temp="Temperature (Â°C) (509466)", pSat="RDO Saturation (%Sat) (669929)", Site) %>%
+  filter(!is.na(DO)) %>%
+  mutate(DateTime=convertToDateTime(DateTime, origin = "1900-01-01"))
+
+Site9<-read_xlsx("F:/R/AquaticR Tools/Conoco pH Data/DO Data/Cono-9  7-15- thru 7-24-19.xlsx") %>% mutate(Site="Site-9") %>%
+  select(DateTime="Date / Time", DO="LDO [mg/l]", pH="pH [Units]", SpC="SpCond [µS/cm]", Temp="Temp [°C]", pSat="LDO% [Sat]", Site) 
+
+Site10<-read_xlsx("F:/R/AquaticR Tools/Conoco pH Data/DO Data/Cono-10  7-15- thru 7-24-19 (2).xlsx") %>% mutate(Site="Site-10")  %>%
+  select(DateTime="Date / Time", DO="LDO [mg/l]", pH="pH [Units]", SpC="SpCond [µS/cm]", Temp="Temp [°C]", pSat="LDO% [Sat]", Site) 
+
+#put all sites together
+DOdat<-rbind(Site3, Site8 %>% select(-'pH'), Site9 %>% select(-'pH'), Site10 %>% select(-'pH'))
+
+#Round to nearest hour
+DOdat$DateTime=floor_date(DOdat$DateTime, unit="hour")
+
+###Combine all continuous data
+AllCon<-full_join(pHdata, DOdat %>% rename(TempDO=Temp), by=c("DateTime", "Site"))
+
+DOpHdata<-AllCon %>%
+  filter(!is.na(DO)) %>%
+  mutate(SpC=ifelse(SpC<50,NA,SpC))
+
+DOpH<-DOpHdata %>% pivot_longer(-c("DateTime", "Site"), names_to="Param", values_to="Value")
+```
+
+
+```{r Import nutrient data, message=FALSE, warning=FALSE, include=FALSE}
+#Nutrient Data
+Nutrients<-read_xlsx("F:/R/AquaticR Tools/Conoco pH Data/Nutrient Data/Nutrients 03-20-19 (1).xlsx")
+Nutrients2<-read_xlsx("F:/R/AquaticR Tools/Conoco pH Data/Nutrient Data/Nutrients 04-19-19.xlsx")
+Nutrients3<-read_xlsx("F:/R/AquaticR Tools/Conoco pH Data/Nutrient Data/Nutrients May June July 2019.xlsx")
+colnames(Nutrients3)=colnames(Nutrients)
+
+Nutrients3$`Collection Date`<-as.POSIXct(Nutrients3$`Collection Date`, format="%m/%d/%Y", tz="EST")
+
+Nutrient<-rbind(Nutrients, Nutrients2, Nutrients3) %>%
+  select(Station="Station Code", Site="Sample ID", CBL, Date="Collection Date", Time="Collection Time", NN="Nitrate+Nitrite", NH4="Ammonium", Phosphate, Alkalinity, Hardness, TP, TN, Chla="Chl-a", Phaeo) %>%
+  filter(!is.na(Site)) 
+
+#Fix Nutrient DateTime
+hour(Nutrient$Date)<-hour(Nutrient$Time)
+minute(Nutrient$Date)<-minute(Nutrient$Time)
+
+Nutrient$DateTime<-Nutrient$Date
+
+```
+
+#####- - Create Add NA Function
+For graphing with goem_line - if timestamps don't exist, the plot will draw a line connecting the data gap.  To prevent that, we add in those time stamps and assign NA's to the parameter
+```{r addNA, message=FALSE, warning=FALSE, include=FALSE}
+#for graphing with goem_line - if timestamps don't exist, the plot will draw a line connecting the data gap.  To prevent that, we add in those time stamps and assign NA to the pH
+
+addNA<-function(data, start, end, by='1 hour'){
+  #generating data frame with all dates (by half hour) between start and end time
+  full <- data.frame(DateTime=seq(start, end, by=by))
+  site<-data$Site[1]
+  
+  #joining KNF and empty data frame
+  alldata<-full_join(data, full, by="DateTime")
+  alldata$Site<-site #assign missing values a siteID
+  
+  #put all values in chronological order
+  alldata<-alldata[order(alldata$DateTime),]
+
+return(alldata)
+}
+
+#function to detect pH 8.5 exceedances
+exceedhigh<-function(vector, thresh=8.5){
+  ifelse(vector>thresh, 1, 0)
+}
+```
+
+##### - - Create Assignwatershed Function
+To add colors to plots
+```{r assignwatershed function, message=FALSE, warning=FALSE, include=FALSE}
+#to help color code plots, athis function assigns watershed to the site
+
+assignwatershed<-function(loggerdata){
+  loggerdata<-as.data.frame(loggerdata) #incase loggerdata is a tibble
+  loggerdata$Wtshed<-as.character("NA")
+  
+  #Determine which column is "Site"
+  datasiteindex<-grep("^Site", colnames(loggerdata), ignore.case = TRUE)
+  
+  #https://stackoverflow.com/questions/4427234/get-column-index-from-label-in-a-data-frame/4427459
+  datasiteindex<-as.integer(datasiteindex)
+  
+  #Vectors assigning sites to watersheds
+ Gondor<-c("Site-1", "Site-2", "Site-4")
+ Hogwarts<-c("Site-5", "Site-6")
+ CasterlyRock<-c("Site-3", "Site-7", "Site-8", "Site-10", "Site-11", "Site-12")
+ Tatooine<-c("Site-9")
+  
+  #find index of each location for the watershed
+  ##this chunk wont work for tibbles
+  Gloc<-which(loggerdata[,datasiteindex] %in% Gondor) #match only returns first match, use which with "%in%" to get all matches
+  Hogloc<-which(loggerdata[,datasiteindex] %in% Hogwarts)
+  CRloc<-which(loggerdata[,datasiteindex] %in% CasterlyRock)
+  Tloc<-which(loggerdata[,datasiteindex] %in% Tatooine)
+  
+  #Create and fill new Watershed column
+  loggerdata$Wtshed[Gloc]<-"Gondor"
+  loggerdata$Wtshed[Hogloc]<-"Hogwarts"
+  loggerdata$Wtshed[CRloc]<-"CasterlyRock"
+  loggerdata$Wtshed[Tloc]<-"Tatooine"
+  
+  return(loggerdata)
+}
+```
+
+##### - Nutrient Plot Functions and Execution
+Store each nutrient plot as a variable to print later.  
+There are three nutrient plotting functions in two chunks:
+ 
+ * Site Nutrient Data Plotted Over Time
+ * Box Plots of Nutrient Data by parameter for every site
+ * Box plots of Nutrient Data by site for every parameter
+
+```{r Nutrient Plots by Site, message=FALSE, warning=FALSE, include=FALSE}
+#Convert everything to numeric
+Nutrient$NN<-as.numeric(Nutrient$NN)
+Nutrient$NH4<-as.numeric(Nutrient$NH4)
+Nutrient$Phosphate<-as.numeric(Nutrient$Phosphate)
+Nutrient$Alkalinity<-as.numeric(Nutrient$Alkalinity)
+Nutrient$Hardness<-as.numeric(Nutrient$Hardness)
+Nutrient$TP<-as.numeric(Nutrient$TP)
+Nutrient$TN<-as.numeric(Nutrient$TN)
+Nutrient$Chla<-as.numeric(Nutrient$Chla)
+Nutrient$Phaeo<-as.numeric(Nutrient$Phaeo)
+
+#Format Nutrient Data
+Nutrientl<-Nutrient %>% 
+  select(-Station, -CBL, -Time, -Date) %>%
+  mutate(CPratio=round(Chla/Phaeo, digits = 2)) %>%
+  pivot_longer(-c("DateTime", "Site"), names_to="Param", values_to="Value") %>%
+  mutate(plotgroup=case_when(Param=="NN"~1,
+                             Param=="NH4"~2,
+                             Param=="TN"~1, 
+                             Param=="TP"~3,
+                             Param=="Phosphate"~3,
+                             Param=="Chla"~4,
+                             Param=="Phaeo"~4,
+                             Param=="Alkalinity"~5,
+                             Param=="Hardness"~5,
+                             Param=="CPratio"~6))
+
+
+nutrientssites<-unique(Nutrientl$Site)
+
+Nutrientl$Param<-factor(Nutrientl$Param, levels=c("NN", "TN", "NH4", "TP", "Phosphate", "Chla", "CPratio", "Alkalinity", "Hardness", "Phaeo"))
+
+#Plot Nutrient Data Over Time Function
+
+nutrientsplot<-function(data, site){ #for use with Nutrientl dataframe
+  
+  Np<-ggplot(data %>% filter(Site==site), aes(x=DateTime, y=Value, color=Param))+
+  geom_point(aes(group=Param))+
+  facet_grid(Param ~., 
+             scales="free",
+             labeller=labeller(Param=c("NN"="Nitrate+ite (mg/L)", 
+                                       "NH4"="Ammonia (mg/L)", 
+                                       "TN"="TN (mg/L)", 
+                                       "TP"="TP (mg/L)", 
+                                       "Phosphate"="Phosphate (mg/L)", 
+                                       "Chla"="Chl a (µg/L)",
+                                       "CPratio"="Chla/Phaeo Ratio",
+                                       "Alkalinity"="Alkalinity (mg/L)",
+                                       "Hardness"="Hardness (mg/L)", 
+                                       "Phaeo"="Phaeo (µg/L)")))+ 
+  scale_color_manual(values=c("#D55E00", "#D55E00", "#D55E00", "#E69F00", "#E69F00", "#009E73", "#009E73", "#000000", "#000000", "#009E73"))+
+  # scale_x_datetime(date_labels="%m-%d", 
+  #                   date_breaks="1 month")+
+  labs(title=paste(site, "Data by Parameter"), x="Date")+
+  theme_bw()+
+  theme(text=element_text(family="serif"), 
+        legend.position="none", 
+        strip.text.y=element_text(face="bold", size = 8),
+        plot.title = element_text(hjust = 0.5, size=12, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5, size=10),
+        strip.background = element_rect(fill=NA, colour="black"),
+        axis.text.x=element_text(angle=45, hjust=0.8, vjust=0.8),
+        axis.text=element_text(color="#000000"), 
+        axis.title=element_text(face="bold"))
+return(Np)
+  
+}
+
+#Box Plots of Nutrient Data
+values=values=c("#D55E00","#D55E00","#E69F00", "#009E73", "#999999", "#009E73") #colors
+labels=c("(mg/L)", "(mg/L)", "(mg/L)", "(µg/L)", "(mg/L)", "Ratio" ) #For legend text
+levels=c(1, 2, 3, 4, 5, 6) #corresponds to data, sets order of factor
+name="Group"
+
+Nutrientl$plotgroup=factor(Nutrientl$plotgroup, levels=levels)
+colScale1<-scale_fill_manual(name=name, values=values, labels=labels)
+
+nutrientboxplot<-function(data, site){
+
+  Npb<-data %>% filter(Site==site) %>%
+  ggplot(aes(x=Param, y=Value, group=Param, fill=plotgroup))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter()+
+  facet_grid(plotgroup ~., scales="free")+
+  colScale1+
+  labs(title=paste(site, "Data by Parameter \nMarch - July 2019"),
+       x="Parameter")+
+  theme_bw()+
+  theme(text=element_text(family="serif"), 
+        legend.position="none", 
+        plot.title = element_text(hjust = 0.5, size=12, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5, size=10),
+        strip.background = element_blank(),
+        strip.text.x = element_blank(),
+        strip.text.y=element_blank(),
+        axis.text.x=element_text(angle=45, hjust=0.8, vjust=0.8),
+        axis.text=element_text(color="#000000"), 
+        axis.title=element_text(face="bold"))
+
+  return(Npb)
+  }
+
+#creating plots for every site
+Site1n<-nutrientsplot(Nutrientl %>% filter(Site=="Site-1"), "Site-1")
+Site1nb<-nutrientboxplot(Nutrientl %>% filter(Site=="Site-1"), "Site-1")
+#Site1n
+Site2n<-nutrientsplot(Nutrientl %>% filter(Site=="Site-2"), "Site-2")
+Site2nb<-nutrientboxplot(Nutrientl %>% filter(Site=="Site-2"), "Site-2")
+#Site2n
+Site3n<-nutrientsplot(Nutrientl %>% filter(Site=="Site-3"), "Site-3")
+Site3nb<-nutrientboxplot(Nutrientl %>% filter(Site=="Site-3"), "Site-3")
+#Site3n
+Site4n<-nutrientsplot(Nutrientl %>% filter(Site=="Site-4"), "Site-4")
+Site4nb<-nutrientboxplot(Nutrientl %>% filter(Site=="Site-4"), "Site-4")
+#Site4n
+Site5n<-nutrientsplot(Nutrientl %>% filter(Site=="Site-5"), "Site-5")
+Site5nb<-nutrientboxplot(Nutrientl %>% filter(Site=="Site-5"), "Site-5")
+#Site5n
+Site6n<-nutrientsplot(Nutrientl %>% filter(Site=="Site-6"), "Site-6")
+Site6nb<-nutrientboxplot(Nutrientl %>% filter(Site=="Site-6"), "Site-6")
+#Site6n
+Site7n<-nutrientsplot(Nutrientl %>% filter(Site=="Site-7"), "Site-7")
+Site7nb<-nutrientboxplot(Nutrientl %>% filter(Site=="Site-7"), "Site-7")
+#Site7n
+Site8n<-nutrientsplot(Nutrientl %>% filter(Site=="Site-8"), "Site-8")
+Site8nb<-nutrientboxplot(Nutrientl %>% filter(Site=="Site-8"), "Site-8")
+#Site8n
+Site9n<-nutrientsplot(Nutrientl %>% filter(Site=="Site-9"), "Site-9")
+Site9nb<-nutrientboxplot(Nutrientl %>% filter(Site=="Site-9"), "Site-9")
+#Site9n
+Site10n<-nutrientsplot(Nutrientl %>% filter(Site=="Site-10"), "Site-10")
+Site10nb<-nutrientboxplot(Nutrientl %>% filter(Site=="Site-10"), "Site-10")
+#Site10n
+
+```
+
+
+```{r Nutrient Plot by Parameter, message=FALSE, warning=FALSE, include=FALSE}
+
+nutrientparamboxplot<-function(data, parameter){
+
+  if(parameter=="Chla"|parameter=="Phaeo"){
+    units="(µg/L)"
+  }
+  if(parameter=="CPratio"){
+    units="(ratio)"
+  }
+  if(parameter!="Chla"&&parameter!="Phaeo"&&parameter!="CPratio"){
+    units="(mg/L)"
+  }
+  
+  Npb<-data %>% filter(Param==parameter) %>%
+  ggplot(aes(x=Site, y=Value, group=Site, fill=Wtshed))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter()+
+  #colScale1+
+  labs(title=paste(parameter, units, "by Site \nMarch - July 2019"),
+       x="Site")+
+  theme_bw()+
+  theme(text=element_text(family="serif"), 
+        legend.position="right", 
+        plot.title = element_text(hjust = 0.5, size=12, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5, size=10),
+        strip.background = element_blank(),
+        strip.text.x = element_blank(),
+        strip.text.y=element_blank(),
+        axis.text.x=element_text(angle=45, hjust=0.8, vjust=0.8),
+        axis.text=element_text(color="#000000"), 
+        axis.title=element_text(face="bold"))
+
+  return(Npb)
+  }
+Nutrientl$Site<-factor(Nutrientl$Site, levels=nutrientssites)
+Nutrientl<-assignwatershed(Nutrientl)
+
+NNp<-nutrientparamboxplot(Nutrientl, "NN")
+TNp<-nutrientparamboxplot(Nutrientl, "TN")
+NH4p<-nutrientparamboxplot(Nutrientl, "NH4")
+TPp<-nutrientparamboxplot(Nutrientl, "TP")
+Phosphatep<-nutrientparamboxplot(Nutrientl, "Phosphate")
+Chlap<-nutrientparamboxplot(Nutrientl, "Chla")
+CPratiop<-nutrientparamboxplot(Nutrientl, "CPratio")
+Alkalinityp<-nutrientparamboxplot(Nutrientl, "Alkalinity")
+Hardnessp<-nutrientparamboxplot(Nutrientl, "Hardness")
+Phaeop<-nutrientparamboxplot(Nutrientl, "Phaeo")
+
+```
+
+##### - Plot All Continuous Data Parameters
+Use plotting function to store each plot as a variable to print later.
+ 
+ * One plot for each site of all parameters values plotted over time
+ * One plot with DO (mg/l) plotted for every site (when applicable)
+ * One plot with DO saturation plotted for every site (when applicable)
+
+```{r Graph combined continuous data, message=FALSE, warning=FALSE, include=FALSE}
+
+sitesparam<-unique(DOpH$Site)
+
+DOpH$Param=factor(DOpH$Param, levels=c("pH", "DO", "pSat", "SpC", "Temp", "TempDO"))
+
+combinedplot<-function(data, site){ #for use with DOpH dataframe
+  
+  ggplot(data %>% filter(Site==site), aes(x=DateTime, y=Value, color=Param))+
+  geom_point(aes(group=Param))+
+  facet_grid(Param ~., 
+             scales="free",
+             labeller=labeller(Param=c("pH"="pH S.U.", "DO"="DO (mg/L)", 
+                                       "pSat"="DO Sat (%)", 
+                                       "SpC"="SpC (µS/cm)", 
+                                       "Temp"="Temp (pH) °C", 
+                                       "TempDO"="Temp (DO) °C")))+ 
+  scale_color_manual(values=c("#0072B2", "#56B4E9", "#56B4E9", "#000000", 
+                             "#999999", "#999999"))+
+  # scale_x_datetime(date_labels="%m-%d", 
+  #                   date_breaks="1 month")+
+  labs(title=paste(site, "Data by Parameter"), x="Date")+
+  theme_bw()+
+  theme(text=element_text(family="serif"), 
+        legend.position="none", 
+        strip.text.y=element_text(face="bold", size = 8),
+        plot.title = element_text(hjust = 0.5, size=12, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5, size=10),
+        strip.background = element_rect(fill=NA, colour="black"),
+        axis.text.x=element_text(angle=45, hjust=0.8, vjust=0.8),
+        axis.text=element_text(color="#000000"), 
+        axis.title=element_text(face="bold"))
+
+}
+
+site3<-combinedplot(DOpH, "Site-3")
+#Site3
+site8<-combinedplot(DOpH, "Site-8")
+#Site8
+site9<-combinedplot(DOpH, "Site-9")
+#Site9
+site10<-combinedplot(DOpH, "Site-10")
+#Site10
+
+
+#Plot DO by Site
+DOpH$Site<-factor(DOpH$Site, levels=c("Site-8", "Site-10", "Site-3", "Site-9"))
+
+DObysite<-ggplot(DOpH %>% filter(Param=="DO"), aes(x=DateTime, y=Value, color=Site))+
+  geom_point(aes(group=Site))+
+  facet_grid(Site ~., 
+             scales="fixed")+ 
+  scale_color_manual(values=c("#0072B2", "#56B4E9", "#000000", 
+                             "#999999"))+
+  labs(title="DO (mg/L) by Site", x="Date")+
+  theme_bw()+
+  theme(text=element_text(family="serif"), 
+        legend.position="none", 
+        strip.text.y=element_text(face="bold", size = 8),
+        plot.title = element_text(hjust = 0.5, size=12, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5, size=10),
+        strip.background = element_rect(fill=NA, colour="black"),
+        axis.text.x=element_text(angle=45, hjust=0.8, vjust=0.8),
+        axis.text=element_text(color="#000000"), 
+        axis.title=element_text(face="bold"))
+
+#Plot DO Saturation by Site
+DOSatbysite<-ggplot(DOpH %>% filter(Param=="pSat"), aes(x=DateTime, y=Value, color=Site))+
+  geom_point(aes(group=Site))+
+  facet_grid(Site ~., 
+             scales="fixed")+ 
+  scale_color_manual(values=c("#0072B2", "#56B4E9", "#000000", 
+                             "#999999"))+
+  labs(title="DO % Saturation by Site", x="Date")+
+  scale_y_continuous(breaks = seq(80, 180, 20))+
+  theme_bw()+
+  theme(text=element_text(family="serif"), 
+        legend.position="none", 
+        strip.text.y=element_text(face="bold", size = 8),
+        plot.title = element_text(hjust = 0.5, size=12, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5, size=10),
+        strip.background = element_rect(fill=NA, colour="black"),
+        axis.text.x=element_text(angle=45, hjust=0.8, vjust=0.8),
+        axis.text=element_text(color="#000000"), 
+        axis.title=element_text(face="bold"))
+
+
+```
+
+##### - Ploting all pH Continuous Data, plots zoomed in on highes value, and pH Flux
+The first two chunks of code define plotting functions for pH and pH Flux.  The last chunk finds the max pH value for each of the sites, and sets the x limits of the pH plots to be a short time around that, effectively zooming in on that value. Then, it uses the functions to store those plots as a variable for every site.
+
+```{r pH continuous data plots, message=FALSE, warning=FALSE, include=FALSE}
+# plot violations of single point DO thresh
+#function variables
+#data = data
+#parameter = parameter of interest
+#thresh1 = lower thresholds
+#thresh2 = upper thresholds
+#Site = Site
+#date.breaks = date breaks for x axis
+#date.format = format of date on x axis
+#ymin = y axis minimum
+#ymax = y axis maximum
+#datebound = vector of two POSIXct values - start and end date to plot: c(date1, date2)
+
+#To see how the function works, set the function variables outside of the function, then run the code in the function (format pH data below the function first to get pHdata1)
+
+
+pointplot<-function(data, parameter, thresh1=6.5, thresh2=8.5, Site, date.breaks="1 month", date.format="%Y-%m", ymin=6, ymax=10, datebound=NA){
+  
+  #datebound is a vector of two POSIXct values - start and end
+  
+  if(is.na(datebound)){ #set to be entire dataframe if not specified
+    datebound=c(data$DateTime[1], data$DateTime[nrow(data)])
+  }
+
+  
+  coln<-colnames(data)
+  loc<-as.integer(which(coln==parameter))
+  yvalues<-as.vector(data[[loc]]) #https://stackoverflow.com/questions/7070173/convert-data-frame-column-to-a-vector
+
+  pointplot<-data %>%
+    ggplot(aes(x=DateTime, y=yvalues))+
+      geom_line(color="#0072B2")+
+      geom_line(y=thresh1, color="#D55E00")+
+      geom_line(y=thresh2, color="#D55E00")+
+      labs(title=paste(Site, parameter), y=parameter, x="Date")+
+      theme_tq()+
+      scale_color_tq()+
+      scale_x_datetime(lim=datebound,
+                       labels=date_format(date.format), 
+                       breaks=date_breaks(date.breaks))+
+      ylim(ymin, ymax)+
+      theme(legend.position = "none",
+            plot.title=element_text(hjust=0.5),
+            plot.margin=margin(1,1,1,1, "point"),
+            axis.text.x=element_text(angle=45, hjust=0.8, vjust=0.8))
+  pointplot
+  return(pointplot)
+}
+#https://cran.r-project.org/web/packages/dplyr/vignettes/programming.html
+```
+
+##### - Calculate and plot pH flux
+This chunk uses the tidyquant library to calculate daily pH summaries. That data is used in a pH flux plotting function.  
+
+```{r pH flux data and plots, message=FALSE, warning=FALSE, include=FALSE}
+###Caluclate daily pH summaries and plot pH flux
+
+#creating daily pH summaries to calculate daily flux
+for(i in 1:length(sites)){ #for every site
+
+data<-pHdata %>%
+  filter(Site==sites[i])
+  
+datastart<-data$DateTime[1]
+dataend<-data$DateTime[nrow(data)]
+datasite<-data$Site[1]
+
+data<-addNA(data, datastart, dataend)
+
+#needed for tq_transmute
+xtsdata<- xts(data["pH"], data$DateTime) #time-series object
+endpoints<-endpoints(xtsdata, 'days') #index of all 23:00 (every day)
+
+  #Daily Summaries
+  dailymax<-data %>%
+      tq_transmute(select = pH, col_rename="DailyMax",
+                   mutate_fun = period.max, INDEX = endpoints) 
+  dailymin<-data %>%
+      tq_transmute(select = pH, col_rename="DailyMin",
+                   mutate_fun = period.min, INDEX = endpoints)
+  dailyflux<-left_join(dailymax, dailymin, by="DateTime") %>%
+    mutate(flux=DailyMax-DailyMin) %>%
+    mutate(Site=datasite)
+  
+  if(i==1){
+    dailypHflux=dailyflux
+  }
+  else{
+    dailypHflux=rbind(dailypHflux, dailyflux)
+  }
+}
+
+pHfluxsum<-dailypHflux %>%
+  filter(!is.na(flux))%>%
+  group_by(Site)%>%
+  summarize(pHFluxMax=max(flux, na.rm=TRUE)) %>%
+  arrange(desc(pHFluxMax))
+
+
+#Function to calculate pH Flux and plot it
+pHflux<-function(data){
+
+  datastart<-data$DateTime[1]
+  dataend<-data$DateTime[nrow(data)]
+  datasite<-data$Site[1]
+
+  data<-addNA(data, datastart, dataend)
+  
+  xtsdata<- xts(data["pH"], data$DateTime) #time-series object
+
+  endpoints<-endpoints(xtsdata, 'days')
+
+  #Daily Summaries
+  dailymax<-data %>%
+      tq_transmute(select = pH, col_rename="DailyMax",
+                   mutate_fun = period.max, INDEX = endpoints) 
+  dailymin<-data %>%
+      tq_transmute(select = pH, col_rename="DailyMin",
+                   mutate_fun = period.min, INDEX = endpoints)
+  dailyflux<-left_join(dailymax, dailymin, by="DateTime") %>%
+    mutate(flux=DailyMax-DailyMin) %>%
+    mutate(Site=datasite)
+
+  dailyfluxg<-gather(dailyflux, "param", "value", -c("DateTime", "Site"))
+  
+  #plot
+  plot3<-dailyflux %>% 
+    ggplot(aes(x=DateTime, y=flux))+ 
+    geom_point(color="#009E73")+
+    geom_line(color="#009E73")+
+    labs(title=paste(datasite, ": Daily pH flux \nDaily Max - Daily Min", sep=""),
+         y="pH flux")+
+    theme_tq()+
+    scale_color_tq()+
+    scale_x_datetime(labels=date_format("%Y-%m"), date_breaks="1 month")+
+    ylim(0, 2)+
+    theme(legend.position = "none",
+        plot.title=element_text(hjust=0.5),
+        plot.margin=margin(1,1,1,1, "point"),
+        axis.text.x=element_text(angle=45, hjust=0.8, vjust=0.8))
+  
+  return(plot3)
+}
+
+
+
+```
+
+```{r pH data plots, message=FALSE, warning=FALSE, include=FALSE}
+pHsites<-unique(pHdata$Site)
+
+for(i in 1:length(pHsites)){
+ data<-pHdata %>%
+    filter(Site==pHsites[i]) 
+  
+  data<-addNA(data, data$DateTime[1], data$DateTime[nrow(data)])
+   data$month<-month(data$DateTime)
+  
+   #location of max value to zoom in plot
+  maxloc<-which.max(data$pH)
+  DateTimemax<-data$DateTime[maxloc]
+  monthmaxstart<-floor_date(DateTimemax, unit="month")
+  monthnext<-ceiling_date(DateTimemax, unit="month")
+  day(monthnext)<-30
+  datebound=c(monthmaxstart, monthnext)
+  
+  if(i==1){
+  p1<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 month", date.format="%Y-%m", ymin=6, ymax=10, datebound=NA)
+  p1.2<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 week", date.format="%m-%d", ymin=6, ymax=10, datebound=datebound)
+  flux1<-pHflux(data)
+  }
+  if(i==2){
+  p2<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 month", date.format="%Y-%m", ymin=6, ymax=10, datebound=NA)
+  p2.2<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 week", date.format="%m-%d", ymin=6, ymax=10, datebound=datebound)
+  flux2<-pHflux(data)
+  }
+   if(i==3){
+  p3<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 month", date.format="%Y-%m", ymin=6, ymax=10, datebound=NA)
+  p3.2<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 week", date.format="%m-%d", ymin=6, ymax=10, datebound=datebound)
+  flux3<-pHflux(data)
+  }
+   if(i==4){
+  p4<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 month", date.format="%Y-%m", ymin=6, ymax=10, datebound=NA)
+  p4.2<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 week", date.format="%m-%d", ymin=6, ymax=10, datebound=datebound)
+  flux4<-pHflux(data)
+  }
+  
+   if(i==5){
+  p5<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 month", date.format="%Y-%m", ymin=6, ymax=10, datebound=NA)
+  p5.2<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 week", date.format="%m-%d", ymin=6, ymax=10, datebound=datebound)
+  flux5<-pHflux(data)
+   }
+  
+   if(i==6){
+  p6<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 month", date.format="%Y-%m", ymin=6, ymax=10, datebound=NA)
+  p6.2<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 week", date.format="%m-%d", ymin=6, ymax=10, datebound=datebound)
+  flux6<-pHflux(data)
+  }
+  
+   if(i==7){
+  p7<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 month", date.format="%Y-%m", ymin=6, ymax=10, datebound=NA)
+  p7.2<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 week", date.format="%m-%d", ymin=6, ymax=10, datebound=datebound)
+  flux7<-pHflux(data)
+  }
+  
+   if(i==8){
+  p8<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 month", date.format="%Y-%m", ymin=6, ymax=10, datebound=NA)
+  p8.2<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 week", date.format="%m-%d", ymin=6, ymax=10, datebound=datebound)
+  flux8<-pHflux(data)
+  }
+  
+  if(i==9){
+  p9<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 month", date.format="%Y-%m", ymin=6, ymax=10, datebound=NA)
+  p9.2<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 week", date.format="%m-%d", ymin=6, ymax=10, datebound=datebound)
+  flux9<-pHflux(data)
+  }
+  
+  if(i==10){
+  p10<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 month", date.format="%Y-%m", ymin=6, ymax=10, datebound=NA)
+  p10.2<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 week", date.format="%m-%d", ymin=6, ymax=10, datebound=datebound)
+  flux10<-pHflux(data)
+  }
+  
+  if(i==11){
+  p11<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 month", date.format="%Y-%m", ymin=6, ymax=10, datebound=NA)
+  p11.2<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 week", date.format="%m-%d", ymin=6, ymax=10, datebound=datebound)
+  flux11<-pHflux(data)
+  p11temp<-pointplot(data, parameter="Temp", Site=pHsites[i],  date.breaks="1 month", date.format="%Y-%m", datebound=NA, thresh1 = 0, thresh2 = NA, ymin = -2.5, ymax = 10)
+  }
+  
+  if(i==12){
+  p12<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 month", date.format="%Y-%m", ymin=6, ymax=10, datebound=NA)
+  p12.2<-pointplot(data, parameter="pH", Site=pHsites[i], thresh1=6.5, thresh2=8.5,  date.breaks="1 week", date.format="%m-%d", ymin=6, ymax=10, datebound=datebound)
+  flux12<-pHflux(data)
+  }
+  
+}
+
+```
+
+##### - Creating data frames of summarized pH data 
+```{r pH daily exceed values, echo=FALSE, message=FALSE, warning=FALSE, fig.width=10}
+pHSites<-unique(pHdata$Site)
+
+Site1<-pHdata %>% filter(Site=="Site-1")
+Site1<-addNA(Site1, Site1$DateTime[1], Site1$DateTime[nrow(Site1)])
+
+#Days Maximum value exceeded by site
+for(i in 1:length(pHSites)){
+d<-pHdata %>% filter(Site==pHSites[i])
+
+d2<-addNA(d, start=d$DateTime[1], end=d$DateTime[nrow(d)])
+  
+xtsdata<- xts(d2["pH"], d2$DateTime)
+
+endpoints<-endpoints(xtsdata, 'days')
+
+  #Daily Summaries
+  dmax<-d2 %>%
+      tq_transmute(select = pH, col_rename="DailyMaxpH",
+                   mutate_fun = period.max, INDEX = endpoints)  %>%
+    mutate(Site=pHSites[i])
+  
+ if(i==1){dailymax<-dmax}
+ if(i>1){dailymax<-rbind(dailymax, dmax)}
+}
+
+dailymax$exceed<-exceedhigh(dailymax$DailyMaxpH)  
+
+#% of days that exceed by site
+dmaxsum<-dailymax %>%
+  filter(!is.na(DailyMaxpH)) %>%
+  group_by(Site) %>%
+  summarize(n=length(DailyMaxpH), exceed=sum(exceed, na.rm=TRUE)) %>%
+  mutate(pdayex=round(exceed/n, digits=2)) %>%
+  arrange(desc(pdayex))
+
+# percent of points that exceed by site
+pHdatpex<-pHdata %>%
+  filter(!is.na(pH)) %>%
+  mutate(exceed=exceedhigh(pH)) %>%
+  group_by(Site) %>%
+  summarize(n=length(pH), exceed=sum(exceed, na.rm=TRUE)) %>%
+  mutate(ppointex=round(exceed/n, digits=3)*100) %>%
+  arrange(desc(ppointex))
+
+# percent of points that exceed between 6 AM and noon
+pHdatpexmorning<-pHdata %>%
+  filter(!is.na(pH)) %>%
+  mutate(hour=hour(DateTime)) %>%
+  filter(hour<13) %>%
+  filter(hour>5) %>%
+  mutate(exceed=exceedhigh(pH)) %>%
+  group_by(Site) %>%
+  summarize(n=length(pH), exceed=sum(exceed, na.rm=TRUE)) %>%
+  mutate(ppointexmorning=round(exceed/n, digits=2)) %>%
+  arrange(desc(ppointexmorning))
+
+```
+
+
+##### - Duration and Magnitude of Exposures Function
+This function provides the duration of exceedance of data below threshold, and tells you how many points in each exceedance event were below each division number.  For example, if the pH exceeded 8.5, for that particual event, this function could give you the number of point (time) it was above 9, 9.5, and 10, not just 8.5.
+```{r duration magnitude function, include=FALSE}
+#this function provides the duration of exceedance of data below threshold, and tells you how many points in each event were below each division.  
+
+#Divs are the different thresholds of interest
+
+durmagnitude<-function(data, timestamp, threshold, div1, div2=NULL, div3=NULL, div4=NULL, div5=NULL, div6=NULL, div7=NULL, div8=NULL, div9=NULL, div10=NULL)
+  {
+#could add a duration argument to look at 4 day averages
+ #  
+# data=pHdata %>% filter(Site=="CON-7")
+# threshold=8.5
+# div1=9.0
+# div2=9.5
+# # #  div3=5.0
+# # #  div4=4.5
+# # #  div5=4.0
+# # #  div6=3.5
+# # #  div7=3.0
+# # #  div8=2.5
+# # #  div9=2.0
+# # #  div10=1.5
+# timestamp=15 #(hours between data points)
+#  div2=NULL
+#  div3=NULL
+#  div4=NULL
+#  div5=NULL
+#  div6=NULL
+#  div7=NULL
+#  div8=NULL
+#  div9=NULL
+#  div10=NULL
+
+ data<-as.data.frame(data)
+  
+  if(!is.null(div1))
+  { div=1 }
+  
+  if(!is.null(div2))
+  { div=2 }
+  
+  if(!is.null(div3))
+  { div=3 }
+  
+  if(!is.null(div4))
+  { div=4 }
+  
+  if(!is.null(div5))
+  { div=5 }
+  
+  if(!is.null(div6))
+  { div=6 }
+  
+  if(!is.null(div7))
+  { div=7 }
+  
+  if(!is.null(div8))
+  { div=8 }
+  
+  if(!is.null(div9))
+  { div=9 }
+  
+  if(!is.null(div10))
+  { div=10 }
+  
+#must be in time order for events to be recognized (add in a site value if multiple are in dataframe)
+  data$pH<-round(data$pH, 2)
+  data<-data[order(data$DateTime),]
+  
+  dataexceed <- data %>%
+    filter(pH > threshold) %>%
+    mutate(duration=NA) %>%
+    mutate(event=NA)
+  
+  if(nrow(dataexceed)==0){
+    return(NULL)
+    stop("no violations")
+  }
+  
+  if(nrow(dataexceed)==1){
+    dataexceed<-dataexceed %>%
+      mutate(maxpH=pH) %>%
+      mutate(durationhr=timestamp) %>%
+      select(DateTime, pH, event, maxpH, durationhr)
+    dataexceed$event=1
+    return(dataexceed)
+    stop("1 violation")
+  }
+  
+   if(nrow(dataexceed)==2){
+    if(as.numeric(dataexceed$DateTime[2]-dataexceed$DateTime[1])>timestamp){
+     dataexceed$event[1]=1
+     dataexceed$event[2]=2
+     dataexceed$maxpH[1]=dataexceed$pH[1]
+     dataexceed$maxpH[2]=dataexceed$pH[2]
+     dataexceed$durationhr=timestamp}
+     else{
+     dataexceed$event=1
+     dataexceed$maxpH=max(dataexceed$pH, na.rm=TRUE)
+     dataexceed$durationhr=timestamp*2
+     }
+     
+     dataexceed<-dataexceed %>%
+      select(DateTime, pH, event, maxpH, durationhr)
+    return(dataexceed)
+    stop("2 violations")
+  }
+  
+  timebefore<-as.character(NA) #without converting to character, R places the double (sec since 1970) in the new column or vector
+  timebefore2<-as.character(dataexceed$DateTime[1:nrow(dataexceed)-1])
+  timebefore<-c(timebefore, timebefore2) #basically a copy and paste shifting one row down
+  
+  dataexceed$timebefore<-timebefore
+  dataexceed$timebefore<-as.POSIXct(dataexceed$timebefore, tz="UTC")
+  
+  #calculate time between exceedance occurance (in minutes)
+  dataexceed$timediff<-as.numeric(dataexceed$DateTime-dataexceed$timebefore) 
+  rowdataexceed<-nrow(dataexceed) #need this variable for for loop 
+  
+  #index of points with diff >timestamp are unique exceedance events
+  newevent<-which(dataexceed$timediff>timestamp) 
+  #newevent<-rbind(dataexceed[1,],dataexceed[newevent,])
+  dataexceed$duration<-as.integer(NA)
+
+if(length(newevent)==1){
+  rows=nrow(dataexceed)  
+     dataexceed<-dataexceed %>%
+      mutate(maxpH=pH) %>%
+      mutate(durationhr=timestamp)
+     #populate event 1 
+     dataexceed$event[1:newevent]=1
+     dataexceed$maxpH[1:newevent]=max(dataexceed$pH[1:newevent], na.rm=TRUE)
+     dataexceed$durationhr[1:newevent]=timestamp*(newevent-1)
+     
+     #populate event 2
+     dataexceed$event[newevent:rows]=2
+     dataexceed$maxpH[newevent:rows]=max(dataexceed$pH[newevent:rows], na.rm=TRUE)
+     dataexceed$durationhr[newevent:rows]=timestamp*(rows-newevent+1)
+     
+     dataexceed<-dataexceed %>%
+      select(DateTime, pH, event, maxpH, durationhr)
+    return(dataexceed)
+    stop("2 violations")
+  }
+  
+####assign event number####
+#in for loops, indexing vectors is faster than dataframes    
+event<-dataexceed$event
+timediff<-dataexceed$timediff
+duration<-dataexceed$duration
+
+for (i in 1:length(newevent)) #for each exceedance event (timediff>2) stored in new event
+{
+  if(i==1)
+  {
+    event[1:newevent[1]-1]<-1
+    duration[1:newevent[i]-1]<-newevent[i]-1
+    
+    indexstart<-newevent[i] 
+    indexend<-newevent[i+1]-1
+    durationlength<-(newevent[i+1])-newevent[i]
+    event[indexstart:indexend]<-2 
+    duration[indexstart:indexend]<-durationlength
+    
+  } else if (i==length(newevent)) #nevwevent[i+1] does not exist, so have to modify for last i value
+  {
+    indexstart<-newevent[i]
+    indexend<-rowdataexceed
+    durationlength<-rowdataexceed-newevent[i]
+    event[indexstart:indexend]<-event[newevent[i-1]]+1 
+    duration[indexstart:indexend]<-durationlength
+  }else
+  {
+    indexstart<-newevent[i] #each index starts at index of a greater than 5 min difference
+    indexend<-newevent[i+1]-1#it ends one before the index of the next 2 hour difference
+    durationlength<-(newevent[i+1])-newevent[i]
+    event[indexstart:indexend]<-event[newevent[i-1]]+1 
+    duration[indexstart:indexend]<-durationlength
+  } 
+}  
+#Duration is time below threshold
+dataexceed$event<-as.character(event)
+dataexceed$duration<-duration
+
+  #assign unique event numbers to each exceedance event
+  #all other points, always compairing to previous point
+
+i=1
+#create columns for each div and populate with 1 if DO is less than it
+if(div!=1) #if there are divisions specified
+{
+  for (i in 1:(div)) #for every division specified    
+  {  
+    if(i!=div){
+    thresh<-get(c(paste("div", i, sep=""))) #thresh value
+    thresh2<-get(c(paste("div", (i+1), sep="")))
+    threshname<-c(paste("div", i, sep="")) #thresh name (eg div1 or div2)
+    
+    dataexceed <- dataexceed %>%
+      mutate(!!threshname := NA) #dynamically create variable name
+      #mutate(!!paste("n", thresh) := NA)
+    colindex<-grep(i, colnames(dataexceed))
+    
+    #places 1 if pH is between thresh and thresh2, NA if not
+    for(i in 1:nrow(dataexceed)){
+    dataexceed[i,colindex]<-ifelse(dataexceed$pH[i]>thresh  && dataexceed$pH[i]<thresh2, 1, 0)}
+    #assign(paste("div", i, sep=""), ifelse(dataexceed$pH<thresh  && dataexceed$pH>thresh2, 1, 0))
+    }
+    if(i==div)
+        thresh<-get(c(paste("div", i, sep=""))) #thresh value
+        threshname<-c(paste("div", i, sep="")) #thresh name (eg div1 or div2)
+        
+        dataexceed <- dataexceed %>%
+          mutate(!!threshname := NA) #dynamically create variable name
+          #mutate(!!paste("n", thresh) := NA) 
+        colindex<-grep(i, colnames(dataexceed))
+        
+        #places 1 if pH is between thresh and thresh2, 0 if not
+        for(i in 1:nrow(dataexceed)){
+        dataexceed[i,colindex]<-ifelse(dataexceed$pH[i]>thresh, 1, 0)}
+        #assign(paste("div", i, sep=""), ifelse(dataexceed$pH>thresh  && dataexceed$pH<thresh2, 1, 0))
+    }
+  }
+
+dataexceed$event<-as.numeric(event)
+
+####Calculate Min DO per event####
+
+maxpH<-dataexceed %>%
+  select(pH, event) 
+
+maxpH<-aggregate(pH ~ event, data=maxpH, max)
+colnames(maxpH)[2]<-"maxpH"
+
+Duration<-dataexceed %>%
+  select(event, duration) %>%
+  mutate(durationmax=duration*timestamp) %>%
+  distinct(event, .keep_all=TRUE) %>%
+  select(-duration)
+
+#Start creating summary table for output
+dataresults1<-dataexceed[c(1, newevent),] %>%
+  select(DateTime, pH, event)
+
+dataresults<-dataexceed %>% 
+  group_by(event) %>%
+  count(event)
+
+#count exceedance of each div (threshold) by exceedance event
+#(aggregate each division by event)
+
+#couldn't figure out how to make a for loop of this
+if(!is.null(div1)&&div!=1)
+  {
+  div1r<-aggregate(div1 ~ event, dataexceed, sum)
+  colnames(div1r)[2]<-c(paste("n", div1, sep=""))
+
+  dataresults<-full_join(dataresults, div1r, by="event")
+  }
+
+if(!is.null(div2))
+{
+  div2r<-aggregate(div2 ~ event, dataexceed, sum)
+  colnames(div2r)[2]<-c(paste("n", div2, sep=""))
+  
+  dataresults<-full_join(dataresults, div2r, by="event")
+}
+
+if(!is.null(div3))
+{
+  div3r<-aggregate(div3 ~ event, dataexceed, sum)
+  colnames(div3r)[2]<-c(paste("n", div3, sep=""))
+  
+  dataresults<-full_join(dataresults, div3r, by="event")
+}
+
+if(!is.null(div4))
+{
+  div4r<-aggregate(div4 ~ event, dataexceed, sum)
+  colnames(div4r)[2]<-c(paste("n", div4, sep=""))
+  
+  dataresults<-full_join(dataresults, div4r, by="event")
+}
+
+if(!is.null(div5))
+{
+  div5r<-aggregate(div5 ~ event, dataexceed, sum)
+  colnames(div5r)[2]<-c(paste("n", div5, sep=""))
+  
+  dataresults<-full_join(dataresults, div5r, by="event")
+}
+
+if(!is.null(div6))
+{
+  div6r<-aggregate(div6 ~ event, dataexceed, sum)
+  colnames(div6r)[2]<-c(paste("n", div6, sep=""))
+  
+  dataresults<-full_join(dataresults, div6r, by="event")
+}
+
+if(!is.null(div7))
+{
+  div7r<-aggregate(div7 ~ event, dataexceed, sum)
+  colnames(div7r)[2]<-c(paste("n", div7, sep=""))
+  
+  dataresults<-full_join(dataresults, div7r, by="event")
+}
+
+if(!is.null(div8))
+{
+  div8r<-aggregate(div8 ~ event, dataexceed, sum)
+  colnames(div8r)[2]<-c(paste("n", div8, sep=""))
+  
+  dataresults<-full_join(dataresults, div8r, by="event")
+}
+
+if(!is.null(div9))
+{
+  div9r<-aggregate(div9 ~ event, dataexceed, sum)
+  colnames(div9r)[2]<-c(paste("n", div9, sep=""))
+  
+  dataresults<-full_join(dataresults, div9r, by="event")
+}
+
+if(!is.null(div10))
+{
+  div10r<-aggregate(div10 ~ event, dataexceed, sum)
+  colnames(div10r)[2]<-c(paste("n", div10, sep=""))
+  
+  dataresults<-full_join(dataresults, div10r, by="event")
+}
+dataresults1<-full_join(dataresults1, maxpH, by = "event") %>%
+  left_join(Duration, by="event")
+dataresultsfinal<-full_join(dataresults1, dataresults, by="event")
+
+if(div==1){
+  dataresultsfinal<-dataresultsfinal %>%
+    select(-n)
+}
+
+return(dataresultsfinal)
+
+}
+
+```
+
+#####- Duration Magnitude of Exposures Execution
+
+```{r Duration and Magnitude of Exposures, echo=FALSE, message=FALSE, warning=FALSE}
+
+#Run durmagnitude() for every site
+for(i in 1:length(pHSites)){
+d<-pHdata %>% filter(Site==pHSites[i])
+
+pHevents<-durmagnitude(d, 1, 8.5, div1 = 8.5) 
+
+if(!is.null(pHevents)){ 
+  pHevents<-pHevents %>%
+  mutate(Site=pHSites[i])}
+
+if(i==1){
+  pHexevents<-pHevents 
+}
+else{
+  pHexevents<-rbind(pHexevents, pHevents)
+}
+}
+
+pHexeventsg<-pHexevents %>%
+  select(Site, DateTime, maxpH, durhr=durationmax, event)
+
+maxevent<-pHexeventsg %>%
+  group_by(Site) %>%
+  summarize(nevents=length(event), maxdurhr=max(durhr, na.rm=TRUE)) %>%
+  arrange(desc(maxdurhr)) %>%
+  mutate(maxdurday=round(maxdurhr/24, digits=1))
+
+nsite<-pHdata %>%
+  filter(!is.na(pH))%>%
+  group_by(Site)%>%
+  summarize(n=length(pH)) 
+
+#Plot data by site#
+
+###Site1
+  plotdata1<-pHexeventsg %>% filter(Site=="Site-1")%>% select(-maxpH, -event)
+  maxeventp1<-maxevent %>% filter(Site=="Site-1")
+  nsitep1<-nsite %>% filter(Site=="Site-1")
+  ndatapoints=nsitep1$n
+  
+  mevent1<-(10*ceiling(maxeventp1$nevents/10))/2 #was using these to set scales, but ultimately decided to do it manually
+  
+  eventSite1<-ggplot(plotdata1, aes(plotdata1$durhr))+
+    geom_histogram(data=plotdata1, binwidth=1, color="black")+ #1 hour bins
+    labs(title=(paste(plotdata1$Site[1], "pH Events Above 8.5")),
+       subtitle=paste("1 hour timestamps, pH Dataset Length = ", ndatapoints, "hrs", sep=""))+
+    scale_y_continuous(name="Number of Events Exceedeing Threshold", 
+                     limits=c(0,20), 
+                     breaks=(c(seq(0, 20, by=10))))+
+    scale_x_continuous(name="Length of Each Event (hrs)",
+                     limits = c(0, 48), breaks=c(0,12,24,36,48))+#seq(0, 48, by=12))+ 
+    theme_bw()+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1), 
+        plot.title = element_text(hjust = 0.5, size=16, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.title=element_text(face="bold", size=14), 
+        legend.position = "none")
+
+####Site2
+   plotdata2<-pHexeventsg %>% filter(Site=="Site-2")%>% select(-maxpH, -event)
+  maxeventp2<-maxevent %>% filter(Site=="Site-2")
+  nsitep2<-nsite %>% filter(Site=="Site-2")
+  ndatapoints=nsitep2$n
+
+  mevent2<-(10*ceiling(maxeventp2$nevents/10))/2
+
+  eventSite2<-ggplot(plotdata2, aes(plotdata2$durhr))+
+    geom_histogram(data=plotdata2, binwidth=1, color="black")+ #1 hour bins
+    labs(title=(paste(plotdata2$Site[1], "pH Events Above 8.5")),
+       subtitle=paste("1 hour timestamps, pH Dataset Length = ", ndatapoints, "hrs", sep=""))+
+    scale_y_continuous(name="Number of Events Exceedeing Threshold",
+                     limits=c(0,10),
+                     breaks=(c(seq(0, 10, by=2))))+
+    scale_x_continuous(name="Length of Each Event (hrs)",
+                     limits = c(0, 48), breaks=c(0,12,24,36,48))+
+    theme_bw()+
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5, size=16, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.title=element_text(face="bold", size=14),
+        legend.position = "none")
+
+###Site3
+  plotdata3<-pHexeventsg %>% filter(Site=="Site-3")%>% select(-maxpH, -event)
+  maxeventp3<-maxevent %>% filter(Site=="Site-3")
+  nsitep3<-nsite %>% filter(Site=="Site-3")
+  ndatapoints=nsitep3$n
+
+  mevent3<-(10*ceiling(maxeventp3$nevents/10))/2
+
+  eventSite3<-ggplot(plotdata3, aes(plotdata3$durhr))+
+  geom_histogram(data=plotdata3, binwidth=1, color="black")+ #1 hour bins
+  labs(title=(paste(plotdata3$Site[1], "pH Events Above 8.5")),
+       subtitle=paste("1 hour timestamps, pH Dataset Length = ", ndatapoints, "hrs", sep=""))+
+  scale_y_continuous(name="Number of Events Exceedeing Threshold",
+                     limits=c(0,10), breaks=(c(seq(0, 10, by=2))))+
+  scale_x_continuous(name="Length of Each Event (hrs)",
+                     limits = c(0, 204), breaks=c(0,12,24,36,48,60,72,84,96,108,120,132,144,156,168,180,192,204))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5, size=16, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.title=element_text(face="bold", size=14),
+        legend.position = "none")
+
+###Site5
+  plotdata5<-pHexeventsg %>% filter(Site=="Site-5")%>% select(-maxpH, -event)
+  maxeventp5<-maxevent %>% filter(Site=="Site-5")
+  nsitep5<-nsite %>% filter(Site=="Site-5")
+  ndatapoints=nsitep5$n
+
+  mevent5<-(10*ceiling(maxeventp5$nevents/10))/2
+
+  eventSite5<-ggplot(plotdata5, aes(plotdata5$durhr))+
+  geom_histogram(data=plotdata5, binwidth=1, color="black")+ #1 hour bins
+  labs(title=(paste(plotdata5$Site[1], "pH Events Above 8.5")),
+       subtitle=paste("1 hour timestamps, pH Dataset Length = ", ndatapoints, "hrs", sep=""))+
+  scale_y_continuous(name="Number of Events Exceedeing Threshold",
+                     limits=c(0,10), breaks=(c(seq(0, 10, by=2))))+
+  scale_x_continuous(name="Length of Each Event (hrs)",
+                     limits = c(0, 48), breaks=c(0,12,24,36,48))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5, size=16, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.title=element_text(face="bold", size=14),
+        legend.position = "none")
+
+###Site7
+  plotdata7<-pHexeventsg %>% filter(Site=="Site-7")%>% select(-maxpH, -event)
+  maxeventp7<-maxevent %>% filter(Site=="Site-7")
+  nsitep7<-nsite %>% filter(Site=="Site-7")
+  ndatapoints=nsitep7$n
+
+  mevent7<-(10*ceiling(maxeventp7$nevents/10))/2
+
+  eventSite7<-ggplot(plotdata7, aes(plotdata7$durhr))+
+  geom_histogram(data=plotdata7, binwidth=1, color="black")+ #1 hour bins
+  labs(title=(paste(plotdata7$Site[1], "pH Events Above 8.5")),
+       subtitle=paste("1 hour timestamps, pH Dataset Length = ", ndatapoints, "hrs", sep=""))+
+  scale_y_continuous(name="Number of Events Exceedeing Threshold",
+                     limits=c(0,10), breaks=(c(seq(0, 10, by=2))))+
+  scale_x_continuous(name="Length of Each Event (hrs)",
+                     limits = c(0, 48), breaks=c(0,12,24,36,48))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5, size=16, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.title=element_text(face="bold", size=14),
+        legend.position = "none")
+
+###Site8
+  plotdata8<-pHexeventsg %>% filter(Site=="Site-8")%>% select(-maxpH, -event)
+  maxeventp8<-maxevent %>% filter(Site=="Site-8")
+  nsitep8<-nsite %>% filter(Site=="Site-8")
+  ndatapoints=nsitep8$n
+
+  mevent8<-(10*ceiling(maxeventp8$nevents/10))/2
+
+  eventSite8<-ggplot(plotdata8, aes(plotdata8$durhr))+
+  geom_histogram(data=plotdata8, binwidth=1, color="black")+ #1 hour bins
+  labs(title=(paste(plotdata8$Site[1], "pH Events Above 8.5")),
+       subtitle=paste("1 hour timestamps, pH Dataset Length = ", ndatapoints, "hrs", sep=""))+
+  scale_y_continuous(name="Number of Events Exceedeing Threshold",
+                     limits=c(0,10), breaks=(c(seq(0, 10, by=2))))+
+  scale_x_continuous(name="Length of Each Event (hrs)",
+                     limits = c(0, 48), breaks=c(0,12,24,36,48))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5, size=16, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.title=element_text(face="bold", size=14),
+        legend.position = "none")
+
+###Site9
+  plotdata9<-pHexeventsg %>% filter(Site=="Site-9")%>% select(-maxpH, -event)
+  maxeventp9<-maxevent %>% filter(Site=="Site-9")
+  nsitep9<-nsite %>% filter(Site=="Site-9")
+  ndatapoints=nsitep9$n
+
+  mevent9<-(10*ceiling(maxeventp9$nevents/10))/2
+
+  eventSite9<-ggplot(plotdata9, aes(plotdata9$durhr))+
+  geom_histogram(data=plotdata9, binwidth=1, color="black")+ #1 hour bins
+  labs(title=(paste(plotdata9$Site[1], "pH Events Above 8.5")),
+       subtitle=paste("1 hour timestamps, pH Dataset Length = ", ndatapoints, "hrs", sep=""))+
+  scale_y_continuous(name="Number of Events Exceedeing Threshold",
+                     limits=c(0,10), breaks=(c(seq(0, 10, by=2))))+
+  scale_x_continuous(name="Length of Each Event (hrs)",
+                     limits = c(0, 48), breaks=c(0,12,24,36,48))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5, size=16, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.title=element_text(face="bold", size=14),
+        legend.position = "none")
+
+###Site10
+  plotdata10<-pHexeventsg %>% filter(Site=="Site-10")%>% select(-maxpH, -event)
+  maxeventp10<-maxevent %>% filter(Site=="Site-10")
+  nsitep10<-nsite %>% filter(Site=="Site-10")
+  ndatapoints=nsitep10$n
+
+  mevent10<-(10*ceiling(maxeventp10$nevents/10))/2
+
+  eventSite10<-ggplot(plotdata10, aes(plotdata10$durhr))+
+  geom_histogram(data=plotdata10, binwidth=1, color="black")+ #1 hour bins
+  labs(title=(paste(plotdata10$Site[1], "pH Events Above 8.5")),
+       subtitle=paste("1 hour timestamps, pH Dataset Length = ", ndatapoints, "hrs", sep=""))+
+  scale_y_continuous(name="Number of Events Exceedeing Threshold",
+                     limits=c(0,25), breaks=(c(seq(0, 25, by=5))))+
+  scale_x_continuous(name="Length of Each Event (hrs)",
+                     limits = c(0, 48), breaks=c(0,12,24,36,48))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5, size=16, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.title=element_text(face="bold", size=14),
+        legend.position = "none")
+
+###Site11
+  plotdata11<-pHexeventsg %>% filter(Site=="Site-11")%>% select(-maxpH, -event)
+  maxeventp11<-maxevent %>% filter(Site=="Site-11")
+  nsitep11<-nsite %>% filter(Site=="Site-11")
+  ndatapoints=nsitep11$n
+
+  mevent11<-(10*ceiling(maxeventp11$nevents/10))/2
+
+  eventSite11<-ggplot(plotdata11, aes(plotdata11$durhr))+
+  geom_histogram(data=plotdata11, binwidth=1, color="black")+ #1 hour bins
+  labs(title=(paste(plotdata11$Site[1], "pH Events Above 8.5")),
+       subtitle=paste("1 hour timestamps, pH Dataset Length = ", ndatapoints, "hrs", sep=""))+
+  scale_y_continuous(name="Number of Events Exceedeing Threshold",
+                     limits=c(0,10), breaks=(c(seq(0, 10, by=2))))+
+  scale_x_continuous(name="Length of Each Event (hrs)",
+                     limits = c(0, 48),
+                     breaks=c(0,12,24,36,48))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5, size=16, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.title=element_text(face="bold", size=14),
+        legend.position = "none")
+
+###Site12
+  plotdata12<-pHexeventsg %>% filter(Site=="Site-12") %>% select(-maxpH, -event)
+  maxeventp12<-maxevent %>% filter(Site=="Site-12")
+  nsitep12<-nsite %>% filter(Site=="Site-12")
+  ndatapoints=nsitep12$n
+
+  mevent12<-(10*ceiling(maxeventp12$nevents/10))/2
+
+  eventSite12<-ggplot(plotdata12, aes(plotdata12$durhr))+
+  geom_histogram(data=plotdata12, binwidth=1, color="black")+ #1 hour bins
+  labs(title=(paste(plotdata12$Site[1], "pH Events Above 8.5")),
+       subtitle=paste("1 hour timestamps, pH Dataset Length = ", ndatapoints, "hrs", sep=""))+
+  scale_y_continuous(name="Number of Events Exceedeing Threshold",
+                     limits=c(0,10), breaks=(c(seq(0, 10, by=2))))+
+  scale_x_continuous(name="Length of Each Event (hrs)",
+                     limits = c(0, 48), breaks=c(0,12,24,36,48))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5, size=16, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        axis.title=element_text(face="bold", size=14),
+        legend.position = "none")
+
+```
+
+#### **Calibration Plots of of Site-3 January/February 2019**
+```{r Other plots, echo=FALSE, message=FALSE, warning=FALSE, fig.width=10, fig.height=8}
+
+Caldates<-read_xlsx("F:/R/AquaticR Tools/Conoco pH Data/Calibration/Site3Calibrationdates.xlsx")
+
+Site3pHdat<-pHdata %>% filter(Site=="Site-3")
+
+JanSite3pH<-pointplot(Site3pHdat, parameter="pH", Site="Calibration dates = dashed lines \nSite-3 2019", date.breaks="2 weeks", date.format="%m-%d", datebound=c(Site3pHdat$DateTime[1], Site3pHdat$DateTime[1728]))+
+  geom_vline(data=Caldates, mapping=aes(xintercept=DateTime, color="Black"), 
+             linetype='dashed')+
+  geom_text(data=Caldates, mapping=aes(x=DateTime, y=6, 
+        label=paste(month(DateTime),"-",day(DateTime)), 
+                          size=0.5, angle=90, vjust=-0.4,
+        hjust=0))
+
+JanSite3Temp<-pointplot(Site3pHdat, parameter="Temp", Site="Calibration dates = dashed lines \nSite-3 2019", date.breaks="2 weeks", date.format="%m-%d", datebound=c(Site3pHdat$DateTime[1], Site3pHdat$DateTime[1728]), thresh1 = 0, thresh2 = NA, ymin = -5, ymax = 15)+
+  geom_vline(data=Caldates, mapping=aes(xintercept=DateTime, 
+                                        color="Black"), 
+             linetype='dashed')+
+  geom_text(data=Caldates, mapping=aes(x=DateTime, y=-5,                        label=paste(month(DateTime),"-",day(DateTime))),
+            size=3, angle=90, vjust=-0.4, hjust=0)
+
+print(ggarrange(JanSite3pH, JanSite3Temp, ncol=1, nrow=2))
+
+index<-which(year(Site3pHdat$DateTime)==2020)
+
+JanSite3pH20<-pointplot(Site3pHdat, parameter="pH", Site="Site-3 2020", 
+                       date.breaks="2 weeks", date.format="%m-%d", 
+                       datebound=c(Site3pHdat$DateTime[index[1]],
+                       Site3pHdat$DateTime[index[length(index)]]))
+
+JanSite3Temp20<-pointplot(Site3pHdat, parameter="Temp", Site="Site-3 2020", 
+                         date.breaks="2 weeks", date.format="%m-%d", 
+                         datebound=c(Site3pHdat$DateTime[index[1]],
+                                  Site3pHdat$DateTime[index[length(index)]]),
+                         thresh1 = 0, thresh2 = NA, ymin = -5, ymax = 15)
+
+print(ggarrange(JanSite3pH20, JanSite3Temp20, ncol=1, nrow=2))
+
+JanSite3pHzoom<-pointplot(Site3pHdat, parameter="pH", Site="Site-3 2019", 
+                       date.breaks="day", date.format="%m-%d", 
+                       datebound=c(Site3pHdat$DateTime[153],
+                       Site3pHdat$DateTime[215]))
+JanSite3tempzoom<-pointplot(Site3pHdat, parameter="Temp", 
+                           Site="Site-3 2019",
+                       date.breaks="day", date.format="%m-%d", 
+                       datebound=c(Site3pHdat$DateTime[153],
+                       Site3pHdat$DateTime[215]), thresh1 = 0, 
+                       thresh2 = NA, ymin = -5, ymax = 10)
+#print(ggarrange(JanSite3pHzoom, JanSite3tempzoom, ncol=1, nrow=2))
+
+```
+
+
+#### **Tile Plot (Heat Map Over Time) of Site Exceedances**
+
+```{r pH daily exceed plot, echo=FALSE, message=FALSE, warning=FALSE, fig.width=10, fig.height=9}
+#Plot color scale
+values=c("#0072B2", "#CC79A7", "999999") #colors
+labels=c("Pass", "Fail", "NA") #For legend text
+levels=c(0, 1, NA) #corresponds to data, sets order of factor
+name="Day Evaluation"
+
+streamorder<-c("Site-7", "Site-8", "Site-9", "Site-10", "Site-12", "Site-3", "Site-11", "Site-6", "Site-5", "Site-1", "Site-4", "Site-2")
+
+dailymax$exceed=factor(dailymax$exceed, levels=levels)
+dailymax$Site=factor(dailymax$Site, levels=rev(streamorder))
+colScale1<-scale_fill_manual(name=name, values=values, labels=labels)
+
+dailymax$Time=round_date(dailymax$DateTime, unit="day")
+    
+plot<-ggplot(dailymax, aes(x=Time, y=Site))+
+  geom_tile(data=subset(dailymax, !is.na(exceed)), aes(fill=exceed))+
+  #geom_tile(data=subset(dailymax, is.na(exceed)), fill="#999999")+
+  colScale1+
+  scale_x_datetime(labels=date_format("'%y-%m"), date_breaks="1 month")+
+  labs(title="Days pH exceeded Max of 8.5", 
+       x="Date")+
+  theme_classic()+
+  theme(text=element_text(family="serif", color="#000000"),
+          plot.title = element_text(hjust = 0.5, size=14, face="bold"), 
+          plot.subtitle = element_text(hjust = 0.5, size=12),
+          axis.text=element_text(color="#000000", size=12),
+          axis.text.x=element_text(angle=45, hjust=0.8, vjust=0.8),  
+          axis.title=element_text(face="bold"),
+          legend.position="right")
+
+plot
+```
+
+#### **Create and print CDF curves for each site**
+
+```{r CDF plots, echo=FALSE, message=FALSE, warning=FALSE, fig.width=15, fig.height=8}
+# Define function to create CDF
+#From Jim
+cdf <- function(inData) {
+  tmp <- cbind(
+    inData[order(inData)],
+    seq(1,length(inData),1)*100/(length(inData)+1)) %>% 
+    data.frame()
+  names(tmp) <- c("input","percentile")
+  return(tmp)
+}
+
+#Create dataframe with CDF results
+for(i in 1:length(pHSites)){
+CDFfilter<-pHdata %>%
+  filter(Site==pHSites[i])
+CDF<-cdf(CDFfilter$pH) %>% mutate(Site=pHSites[i])
+
+if(i==1){
+  CDFdat<-CDF 
+}
+  else{
+    CDFdat<-rbind(CDFdat, CDF)
+  }
+}
+
+#Plot of CDF data by Site
+CDFdat$Site<-factor(CDFdat$Site, levels=pHSites)
+CDFdat <- CDFdat %>% rename(pH=input)
+
+CDFplot<-CDFdat %>%
+ggplot(aes(x=pH,y=percentile))+
+  geom_point(aes(colour=Site))+
+  geom_vline(xintercept=8.5, color="#D55E00")+
+  labs(title="pH CDF plots", x="pH", y="Percentile")+
+  theme(legend.position = "right",
+        plot.title = element_text(hjust = 0.5, size=12, face="bold"),
+        axis.text.x=element_text(angle=45, hjust=0.8, vjust=0.8),
+        axis.text=element_text(color="#000000"), 
+        axis.title=element_text(face="bold", size=10),
+        legend.text=element_text(size=10))
+#CDFplot
+
+#Create data frame CDF percentile at threshold (8.5)
+CDFover<-CDFdat %>%
+  filter(pH==8.5) %>%
+  group_by(Site) %>%
+  summarize(CDFpercentile8.5=min(percentile)) %>%
+  arrange(CDFpercentile8.5)
+
+#Plot CDF curves with Watershed colored
+CDFdat<-assignwatershed(CDFdat)
+
+CDFplot2<-CDFdat %>%
+ggplot(aes(x=pH,y=percentile))+
+  geom_point(aes(colour=Wtshed))+
+  geom_vline(xintercept=8.5, color="#D55E00")+
+  geom_hline(yintercept=90, color="#D55E00")+
+  labs(title="pH CDF plots", x="pH", y="Percentile")+
+  scale_color_manual(name="Wtshed", values=c("#E69F00", "#56B4E9", "#0072B2", "#CC79A7"))+
+  theme(legend.position = "right",
+        plot.title = element_text(hjust = 0.5, size=12, face="bold"),
+        axis.text.x=element_text(angle=45, hjust=0.8, vjust=0.8),
+        axis.text=element_text(color="#000000"), 
+        axis.title=element_text(face="bold", size=10),
+        legend.text=element_text(size=10))
+
+print(ggarrange(CDFplot, CDFplot2, ncol=2))
+
+```
+
+#### **Creating and printing plots of pH by hour**
+
+Finally learned how to store plots in a list rather than name a variable for every single plot.
+
+```{r pH by hour rather than date-time, echo=FALSE, message=FALSE, warning=FALSE}
+
+#creating empty list
+hourpH<-vector(mode = "list", length = 12)
+
+#adding hour to data
+hrpHdata<-pHdata %>%
+  mutate(hr=as.integer(hour(pHdata$DateTime)))
+
+hrpHdata<-assignwatershed(hrpHdata)
+
+#trying to plot box around range of medians, but not worth time to figure out
+# hrmedian<-hrpHdata %>%
+#   group_by(Site, hr) %>%
+#   summarize(median=median(pH, na.rm=TRUE)) 
+# 
+# hrmedian2<-hrmedian %>%
+#   group_by(Site) %>%
+#   summarize(minmedian=min(median, na.rm=TRUE),
+#             maxmedian=max(median, na.rm=TRUE))
+
+for(l in 1:length(sites)){
+datahr<-hrpHdata %>% filter(Site==sites[l])
+
+Wtshed<-datahr$Wtshed[1]
+
+# hrmediansite<-hrmedian2 %>% filter(Site==sites[l])  
+# ymin=hrmediansite$minmedian
+# ymax=hrmediansite$maxmedian
+
+datahrp <- ggplot(datahr, aes(x=hr, y=pH))+
+  geom_boxplot(aes(group=hr))+
+  geom_hline(yintercept=8.5, color="#D55E00")+
+  # geom_rect(mapping=aes(ymin=ymin, ymax=ymax, xmin=-0.5, xmax=23.5), 
+  #           color="#56B4E9", fill="#56B4E9", alpha=0.01)+
+  labs(title=paste(sites[l], "pH by hour"), subtitle = Wtshed,
+       x="Hour", y="pH")+
+  theme_bw()+
+  scale_x_continuous(breaks=c(seq(from=0, to=23, by=1)))+
+  scale_y_continuous(breaks=c(seq(from=6.5, to=9.25, by=0.25)))+
+  ylim(6.5, 9.25)+
+  theme(text=element_text(family="serif", size=12), 
+        legend.position="right", 
+        plot.title = element_text(hjust = 0.5, size=14, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5, size=10),
+        axis.text.x=element_text(angle=45, hjust=0.8, vjust=0.8),
+        axis.text=element_text(color="#000000", size=12), 
+        axis.title=element_text(face="bold"))
+
+hourpH[[l]]<-datahrp
+}
+
+
+
+```
+
+
+```{r print plot pH by hour, echo=FALSE, message=FALSE, warning=FALSE, fig.height=14, fig.width=12}
+
+print(ggarrange(hourpH[[7]], hourpH[[8]], hourpH[[10]], hourpH[[3]], hourpH[[9]], nrow=3, ncol=2))
+
+print(ggarrange(hourpH[[1]], hourpH[[4]], hourpH[[2]], NA, hourpH[[6]], hourpH[[5]], nrow=3, ncol=2))
+
+```
+
+
+#### **Plotting Data By Watershed**
+```{r pH CR Longitudinal plots, echo=FALSE, message=FALSE, warning=FALSE, fig.width=12, fig.height=14}
+
+#Sites in Watershed
+Sitelong<-c("Site-7", "Site-8", "Site-9", "Site-10", "Site-12", "Site-3", "Site-11")
+
+phlong<-pHdata %>% 
+  filter(Site %in% Sitelong)
+
+phlong$Site<-factor(phlong$Site, levels=Sitelong)
+
+for(i in 1:length(Sitelong)){
+dataNA<-phlong %>%
+  filter(Site==Sitelong[i])
+dataNA<-addNA(dataNA, start=min(dataNA$DateTime), end=max(dataNA$DateTime))
+
+if(i==1){phlong2<-dataNA}
+else{phlong2<-rbind(phlong2, dataNA)}
+}
+
+ggplot(phlong2, aes(x=DateTime, y=pH, color=Site))+
+  geom_line(aes(group=Site))+
+  facet_grid(Site ~.)+ 
+  scale_color_manual(values=c("#999999", "#E69F00", "#56B4E9", "#009E73", "#0072B2", "#000000", "#CC79A7"))+
+  scale_x_datetime(date_labels="%m-%d", 
+                     date_breaks="1 month")+
+  labs(title="Casterly Rock Data: Jan 2019 - Jan 2020", subtitle="Ustream to Downstream\n(Site9) is not on Mainstem, but a trib", x="Date", y="pH")+
+  theme_bw()+
+    theme(text=element_text(family="serif"), 
+        legend.position="none", 
+        strip.text.y=element_text(face="bold", size = 8),
+        plot.title = element_text(hjust = 0.5, size=14, 
+                                  face="bold"),
+        plot.subtitle = element_text(hjust = 0.5, size=10),
+        strip.background = element_rect(fill=NA, colour="black"),
+        strip.text=element_text(size=10),
+        axis.text.x=element_text(angle=45, hjust=0.8, vjust=0.8, size=10),
+        axis.text=element_text(color="#000000"), 
+        axis.title=element_text(face="bold", size=12))
+
+phlongsummer<-phlong2 %>%
+  filter(DateTime>as.POSIXct("2019-03-01 02:00:00", tz="EST")) %>%
+  filter(DateTime<as.POSIXct("2019-08-30 02:00:00", tz="EST"))
+
+####Plotting Just Summer Data in Watershed#####
+ggplot(phlongsummer, aes(x=DateTime, y=pH, color=Site))+
+  geom_line(aes(group=Site))+
+  geom_line(y=8.5, color="#CC79A7")+
+  facet_grid(Site ~ .)+ 
+  scale_color_manual(values=c("#999999", "#E69F00", "#56B4E9", "#009E73", "#000000"))+
+  scale_x_datetime(date_labels="%m-%d", 
+                     date_breaks="1 month")+
+  labs(title="Casterly Rock Data: March 2019 - Sept 2019, Ustream to Downstream", subtitle="Site 9 is Trib to Mainstem\n Dam is between site-10 and Site-3", 
+       x="Date", y="pH")+
+  theme_bw()+
+    theme(text=element_text(family="serif"), 
+        legend.position="none", 
+        strip.text.y=element_text(face="bold", size = 8),
+        plot.title = element_text(hjust = 0.5, size=14, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5, size=10),
+        strip.background = element_rect(fill=NA, colour="black"),
+        strip.text=element_text(size=10),
+        axis.text.x=element_text(angle=45, hjust=0.8, vjust=0.8, size=10),
+        axis.text=element_text(color="#000000"), 
+        axis.title=element_text(face="bold", size=12))
+
+```
+
+
+```{r Gondor Longitudinal plots, echo=FALSE, message=FALSE, warning=FALSE, fig.width=12, fig.height=10}
+####Gondor
+Gondorlong<-c("Site-1", "Site-4", "Site-2") #US to DS
+Gondlong<-pHdata %>% 
+  filter(Site %in% Gondorlong)
+
+Gondlong$Site<-factor(Gondlong$Site, levels=Gondorlong)
+
+for(i in 1:length(Gondorlong)){
+dataNA<-Gondlong %>%
+  filter(Site==Gondorlong[i])
+dataNA<-addNA(dataNA, start=min(dataNA$DateTime), end=max(dataNA$DateTime))
+
+if(i==1){Gondlong2<-dataNA}
+else{Gondlong2<-rbind(Gondlong2, dataNA)}
+}
+
+Gondlongsummer<-Gondlong2 %>%
+  filter(DateTime>as.POSIXct("2019-03-01 02:00:00", tz="EST")) %>%
+  filter(DateTime<as.POSIXct("2019-09-30 02:00:00", tz="EST"))
+
+ggplot(Gondlongsummer, aes(x=DateTime, y=pH, color=Site))+
+  geom_line(aes(group=Site))+
+  geom_line(y=8.5, color="#CC79A7")+
+  facet_grid(Site ~ .)+ 
+  scale_color_manual(values=c("#999999", "#E69F00", "#56B4E9"))+
+  scale_x_datetime(date_labels="%m-%d", 
+                     date_breaks="1 month")+
+  labs(title="Gondor Data", subtitle="Ustream to Downstream", 
+       x="Date", y="pH")+
+  theme_bw()+
+  theme(text=element_text(family="serif"), 
+        legend.position="none", 
+        strip.text.y=element_text(face="bold", size = 8),
+        plot.title = element_text(hjust = 0.5, size=12, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5, size=10),
+        strip.background = element_rect(fill=NA, colour="black"),
+        strip.text=element_text(size=10),
+        axis.text.x=element_text(angle=45, hjust=0.8, vjust=0.8, size=10),
+        axis.text=element_text(color="#000000"), 
+        axis.title=element_text(face="bold", size=12))
+
+
+```
+
+
+```{r Hogwarts Longitudinal plots, echo=FALSE, message=FALSE, warning=FALSE, fig.width=12, fig.height=8}
+#Hogwarts
+Hoglongsites<-c("Site-6", "Site-5") #US to DS
+Hoglong<-pHdata %>% 
+  filter(Site %in% Hoglongsites)
+
+Hoglong$Site<-factor(Hoglong$Site, levels=Hoglongsites)
+
+for(i in 1:length(Hoglongsites)){
+dataNA<-Hoglong %>%
+  filter(Site==Hoglongsites[i])
+dataNA<-addNA(dataNA, start=min(dataNA$DateTime), end=max(dataNA$DateTime))
+
+if(i==1){Hoglong2<-dataNA}
+else{Hoglong2<-rbind(Hoglong2, dataNA)}
+}
+
+Hoglongsummer<-Hoglong2 %>%
+  filter(DateTime>as.POSIXct("2019-03-01 02:00:00", tz="EST")) %>%
+  filter(DateTime<as.POSIXct("2019-09-30 02:00:00", tz="EST"))
+
+ggplot(Hoglongsummer, aes(x=DateTime, y=pH, color=Site))+
+  geom_line(aes(group=Site))+
+  geom_line(y=8.5, color="#CC79A7")+
+  facet_grid(Site ~ .)+ 
+  scale_color_manual(values=c("#999999", "#E69F00"))+
+  scale_x_datetime(date_labels="%m-%d", 
+                     date_breaks="1 month")+
+  labs(title="Hogwarts", subtitle="Ustream to Downstream", 
+       x="Date", y="pH")+
+  theme_bw()+
+    theme(text=element_text(family="serif"), 
+        legend.position="none", 
+        strip.text.y=element_text(face="bold", size = 8),
+        plot.title = element_text(hjust = 0.5, size=12, face="bold"),
+        plot.subtitle = element_text(hjust = 0.5, size=10),
+        strip.background = element_rect(fill=NA, colour="black"),
+        strip.text=element_text(size=10),
+        axis.text.x=element_text(angle=45, hjust=0.8, vjust=0.8, size=10),
+        axis.text=element_text(color="#000000"), 
+        axis.title=element_text(face="bold", size=12))
+
+
+```
+
+
+####Stressor Identification Thresholds
+
+* **TP**: 0.03 mg/L
+
+* **Orthophosphate**: 0.01 mg/L
+
+* **TN**: 3.0 mg/L
+
+* **Nitrite**: 0.01 mg/L
+
+* **Nitrate**: 3.0 mg/L
+
+* **DO sat**: 115% 
+
+* **Agricultural Land Use**: >55%
+
+* **Forest**: <20% 
+
+Chl a/phaeopigment ratio: low ratio should indicate high algal senescence and potential decomposition
+
+##### **Printing the saved nutrient parameter plots**
+
+```{r print nutrient data by site, echo=FALSE, message=FALSE, warning=FALSE, fig.height=8}
+
+print(ggarrange(NNp, TNp, NH4p, ncol=2, nrow=2, common.legend=TRUE))
+
+```
+
+```{r print Phosphate data by site, echo=FALSE, message=FALSE, warning=FALSE, fig.height=4}
+print(ggarrange(TPp, Phosphatep, ncol=2, nrow=1, common.legend=TRUE))
+```
+
+```{r print chlorophyll data by site, echo=FALSE, message=FALSE, warning=FALSE, fig.height=8}
+print(ggarrange(Chlap, Phaeop, CPratiop, ncol=2, nrow=2, common.legend=TRUE))
+```
+
+```{r print Alkalinity data by site, echo=FALSE, message=FALSE, warning=FALSE, fig.height=4}
+print(ggarrange(Alkalinityp, Hardnessp, ncol=2, nrow=1, common.legend=TRUE))
+
+```
+
+
+#### **Printing 4 plots of Data by Site**
+
+* Entire Record of pH data
+* Maximum pH Zoomed in
+* Daily pH Flux
+* Site Nutrient Data
+* All continuous data parameters if available 
+
+```{r pH plots all sites, echo=FALSE, message=FALSE, warning=FALSE, fig.width=10, fig.height=10}
+print(ggarrange(p1, p1.2, flux1, Site1nb, ncol=2, nrow=2))
+print(ggarrange(p2, p2.2, flux2, Site2nb, ncol=2, nrow=2))
+print(ggarrange(p3, p3.2, flux3, Site3nb, ncol=2, nrow=2))
+print(site3)
+print(ggarrange(p4, p4.2, flux4, Site4nb, ncol=2, nrow=2))
+print(ggarrange(p5, p5.2, flux5, Site5nb, ncol=2, nrow=2))
+print(ggarrange(p6, p6.2, flux6, Site6nb, ncol=2, nrow=2))
+print(ggarrange(p7, p7.2, flux7, Site7nb, ncol=2, nrow=2))
+print(ggarrange(p8, p8.2, flux8, Site8nb, ncol=2, nrow=2))
+print(site8)
+print(ggarrange(p9, p9.2, flux9, Site9nb, ncol=2, nrow=2))
+print(site9)
+print(ggarrange(p10, p10.2, flux10, Site10nb, ncol=2, nrow=2))
+print(site10)
+print(ggarrange(p11, p11.2, p11temp, flux11, ncol=2, nrow=2))
+print(ggarrange(p12, p12.2, flux12, ncol=2, nrow=2))
+
+```
+
+#### **Printing DO plots**
+
+```{r DO plots all sites, echo=FALSE, message=FALSE, warning=FALSE, fig.width=10, fig.height=10}
+
+print(ggarrange(DOSatbysite, DObysite, ncol=1, nrow=2))
+
+```
+
+#### **Printing Duration Magnitude Plots**
+
+```{r durmag plots all sites, echo=FALSE, message=FALSE, warning=FALSE,  fig.height=10, fig.width=10}
+print(ggarrange(eventSite1, eventSite2, eventSite3, eventSite5,
+                ncol=2, nrow=2))
+print(ggarrange(eventSite7, eventSite8, eventSite9, eventSite10,
+                ncol=2, nrow=2))
+
+```
+
+```{r durmag plots all sites2, echo=FALSE, message=FALSE, warning=FALSE,  fig.height=5, fig.width=10}
+print(ggarrange(eventSite11, eventSite12,
+                ncol=2, nrow=1))
+```
+
+
+#### **Print interactive table of data summaries**
+```{r Table of different assessment criteria, echo=FALSE, message=FALSE, warning=FALSE}
+maxpHvalue<-dailymax %>%
+  group_by(Site) %>%
+  summarise(MaxpH=max(DailyMaxpH, na.rm=TRUE))
+
+results<-left_join(pHdatpex %>% select(-n, -exceed), CDFover, by="Site") %>%
+  left_join(dmaxsum %>% select(-n, -exceed), by="Site") %>%
+  left_join(pHfluxsum, by="Site") %>%
+  left_join(maxevent, by="Site") %>%
+  left_join(maxpHvalue, by="Site") %>%
+  left_join(pHdatpex %>% select(Site, n), by="Site") %>%
+  rename(nexceedevents=nevents, exmaxdurationhr=maxdurhr, exmaxdurationday=maxdurday) 
+
+results<-assignwatershed(results) %>%
+    select(Site, Wtshed, n, MaxpH, everything()) %>%
+  mutate(CDFpercentile8.5=ifelse(is.na(CDFpercentile8.5), 100.00, CDFpercentile8.5)) %>%
+  mutate(CDFpercentile8.5=round(CDFpercentile8.5, digits=1)) %>%
+  mutate(pHFluxMax=round(pHFluxMax, digits=2))
+
+datatable(results,
+          extensions = "FixedColumns",
+          options=list(pageLength=12, 
+                       fixedColumns=list(leftColumns=1)))
+
+```
+
+
+
+#### **Testing interactive dygraphs**
+```{r Site3 dygraph, echo=FALSE, message=FALSE, warning=FALSE, fig.width=12, fig.height=8}
+
+datastart<-Site3pHdat$DateTime[1]
+dataend<-Site3pHdat$DateTime[nrow(Site3pHdat)]
+
+Site3pHdatx<-addNA(Site3pHdat, datastart, dataend)
+
+#must be time series (xts) object
+Site3xts<- xts(Site3pHdatx["pH"], Site3pHdatx$DateTime)
+
+library(dygraphs)
+dygraph(Site3xts, main="Site-3 pH") %>% dyRangeSelector()
+
+```
+
