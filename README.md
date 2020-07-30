@@ -1,5 +1,5 @@
 # Continuous-Data-Visualizations
-The two code (.Rmd) documents were created to explore continuous and discrete data collected to determine if high pH values in the Casterly Rock Watershed were natural or due to the already identified nutrient impairment.  
+The two code (.Rmd) documents were created to explore continuous and discrete data collected to determine if high pH values in the Casterly Rock Watershed were natural or due to the already identified nutrient impairment.  Open the two associated .html files to see the graphs.
 
 The data_graphing_AquaticRTools.Rmd includes graphing functions and uses ggarrange to print the graphs.  Open the data_graphing_AquaticRTools.html to see the graphs and then you can find the associated code in the Rmd. 
 Graphs include:
