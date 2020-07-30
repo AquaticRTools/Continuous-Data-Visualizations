@@ -1,10 +1,11 @@
 # Continuous-Data-Visualizations
 The two code (.Rmd) documents were created to explore continuous and discrete data collected to determine if high pH values in the Casterly Rock Watershed were natural or due to the already identified nutrient impairment.  Open the two associated .html files to see the graphs.
 
-The data_graphing_AquaticRTools.Rmd includes graphing functions and uses ggarrange to print the graphs.  Open the data_graphing_AquaticRTools.html to see the graphs and then you can find the associated code in the Rmd. 
+The data_graphing_AquaticRTools.Rmd includes graphing functions and uses ggarrange to print the graphs. There are daily summaries calculated with the tidyquant::transmute function. I made several loops to run plotting functions for each site's data.  Intially I saved each plot in it's own variable name, but then I learned to create a list to save the plots in.  You can open the data_graphing_AquaticRTools.html to see the graphs and then hopefully find the associated code in the Rmd. 
+
 Graphs include:
-- Continuous data plot with calibration date labeled on vertical lines
-- Tile plot (heat map) of exceedances over time
+- Continuous data plot (value vs time) with calibration date labeled on associated vertical lines
+- Tile plot (heat map) of exceedances over time, all sites in one graph
 - CDF curve for each site
 - Hourly pH plots
 - Facet plots of continuous pH data by watershed
