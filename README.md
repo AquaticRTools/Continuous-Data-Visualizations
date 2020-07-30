@@ -3,11 +3,11 @@ The two code (.Rmd) documents were created to explore continuous and discrete da
 
 The data_graphing_AquaticRTools.Rmd includes graphing functions and uses ggarrange to print the graphs.  Open the data_graphing_AquaticRTools.html to see the graphs and then you can find the associated code in the Rmd. 
 Graphs include:
-- Continuous data plot with calibration dates as vertical lines
+- Continuous data plot with calibration date labeled on vertical lines
 - Tile plot (heat map) of exceedances over time
-- CDF curve creation and ploting for each site
+- CDF curve for each site
 - Hourly pH plots
-- Facet plots of Continuous pH data by watershed
+- Facet plots of continuous pH data by watershed
 - Box plots of discrete nutrient/water chemistry sampling results
 - A set of 4 plots by site: all pH data on record, zoomed in on max pH value, continuous daily pH flux, and site nutrient data box plots
 - Facet Site Plots of DO
